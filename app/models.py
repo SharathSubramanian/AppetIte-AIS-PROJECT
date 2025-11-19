@@ -1,52 +1,51 @@
-from typing import List
-from pydantic import BaseModel, EmailStr
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
-from app.db.database import Base
+from .database import Base
 
-class PantryItem(Base):
-    __tablename__ = "pantry"
+
+class User(Base):
+    __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    ingredient = Column(String, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)
+    password_hash = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-class UserBase(BaseModel):
-    email: EmailStr
+    pantry_items = relationship("PantryItem", back_populates="owner")
+    shopping_lists = relationship("ShoppingList", back_populates="owner")
 
 
-class UserCreate(UserBase):
-    password: str
+class PantryItem(Base):
+    __tablename__ = "pantry_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    name = Column(String, index=True, nullable=False)
+    category = Column(String, index=True, nullable=True)
+    quantity = Column(Float, default=1.0)
+    unit = Column(String, default="unit")
+
+    expiry_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="pantry_items")
 
 
-class UserLogin(UserBase):
-    password: str
+class ShoppingList(Base):
+    __tablename__ = "shopping_lists"
 
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-class UserRead(UserBase):
-    id: int
+    recipe_name = Column(String, nullable=False)
+    # For simplicity store as JSON string (or move to separate table later)
+    items_json = Column(String, nullable=False)
 
-    class Config:
-        from_attributes = True  # pydantic v2
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_completed = Column(Boolean, default=False)
 
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-class RecipeGenerateRequest(BaseModel):
-    ingredients: str
-
-
-class RecipeResponse(BaseModel):
-    title: str
-    instructions: List[str]
-    categories: List[str] = []
-
-
-class RecommendationResponse(BaseModel):
-    recipes: List[RecipeResponse]
+    owner = relationship("User", back_populates="shopping_lists")

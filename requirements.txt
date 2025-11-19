@@ -9,3 +9,10 @@ transformers
 peft
 torch
 python-multipart
+fastapi
+uvicorn
+sqlalchemy
+passlib[bcrypt]
+python-jose[cryptography]
+pydantic
+accelerate
