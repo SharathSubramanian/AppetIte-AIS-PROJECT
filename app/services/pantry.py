@@ -1,5 +1,5 @@
 # app/services/pantry.py
-
+from datetime import date, timedelta
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -12,16 +12,13 @@ def create_pantry_item(
     user_id: int,
     item_in: schemas.PantryItemCreate,
 ) -> models.PantryItem:
-    """
-    Create a pantry item for a specific user.
-    """
     item = models.PantryItem(
-        user_id=user_id,                     # ✅ IMPORTANT: tie to the current user
+        user_id=user_id,
         name=item_in.name,
         category=item_in.category,
         quantity=item_in.quantity,
         unit=item_in.unit,
-        expiry_date=item_in.expiry_date,     # this is Optional[date]
+        expiry_date=item_in.expiry_date,
     )
     db.add(item)
     db.commit()
@@ -34,13 +31,28 @@ def list_pantry_items(
     user_id: int,
     category: Optional[str] = None,
 ) -> List[models.PantryItem]:
-    """
-    List pantry items for the given user, optionally filtered by category.
-    """
-    query = db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id)
-
+    q = db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id)
     if category:
-        query = query.filter(models.PantryItem.category == category)
+        q = q.filter(models.PantryItem.category == category)
+    return q.order_by(models.PantryItem.created_at.desc()).all()
 
-    # Keep a deterministic order
-    return query.order_by(models.PantryItem.created_at.asc()).all()
+
+def get_expiring_items(
+    db: Session,
+    user_id: int,
+    days: int = 7,
+):
+    today = date.today()
+    cutoff = today + timedelta(days=days)
+
+    return (
+        db.query(models.PantryItem)
+        .filter(
+            models.PantryItem.user_id == user_id,
+            models.PantryItem.expiry_date.is_not(None),
+            models.PantryItem.expiry_date >= today,
+            models.PantryItem.expiry_date <= cutoff,
+        )
+        .order_by(models.PantryItem.expiry_date.asc())
+        .all()
+    )

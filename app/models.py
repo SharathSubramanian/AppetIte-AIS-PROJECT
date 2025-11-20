@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean
+# app/models.py
+from datetime import datetime, date
+from sqlalchemy import Column, Integer, String, Float, DateTime, Date, Boolean, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
 
 from .database import Base
 
@@ -9,43 +10,42 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True, nullable=False)
-    email = Column(String, unique=True, index=True, nullable=True)
-    password_hash = Column(String, nullable=False)
+    username = Column(String(64), unique=True, index=True, nullable=False)
+    email = Column(String(256), unique=False, nullable=True)
+    password_hash = Column(String(256), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    pantry_items = relationship("PantryItem", back_populates="owner")
-    shopping_lists = relationship("ShoppingList", back_populates="owner")
+    pantry_items = relationship("PantryItem", back_populates="user", cascade="all, delete-orphan")
+    shopping_lists = relationship("ShoppingList", back_populates="user", cascade="all, delete-orphan")
 
 
 class PantryItem(Base):
     __tablename__ = "pantry_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
 
-    name = Column(String, index=True, nullable=False)
-    category = Column(String, index=True, nullable=True)
-    quantity = Column(Float, default=1.0)
-    unit = Column(String, default="unit")
+    name = Column(String(128), index=True, nullable=False)
+    category = Column(String(64), index=True, nullable=True)
+    quantity = Column(Float, nullable=True)
+    unit = Column(String(32), nullable=True)
 
-    expiry_date = Column(DateTime, nullable=True)
+    expiry_date = Column(Date, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    owner = relationship("User", back_populates="pantry_items")
+    user = relationship("User", back_populates="pantry_items")
 
 
 class ShoppingList(Base):
     __tablename__ = "shopping_lists"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
 
-    recipe_name = Column(String, nullable=False)
-    # For simplicity store as JSON string (or move to separate table later)
-    items_json = Column(String, nullable=False)
+    recipe_name = Column(String(256), nullable=False)
+    items_json = Column(Text, nullable=False)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
     is_completed = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    owner = relationship("User", back_populates="shopping_lists")
+    user = relationship("User", back_populates="shopping_lists")

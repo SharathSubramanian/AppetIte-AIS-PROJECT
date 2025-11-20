@@ -1,19 +1,47 @@
+# frontend/pages/3_Quick_Generate.py
+
 import streamlit as st
 from utils.api import quick_generate
 
-st.title("⚡ Quick Generate Recipe")
+st.set_page_config(page_title="Quick Generate", page_icon="⚡")
 
-ingredients = st.text_area("Enter ingredients (comma-separated):")
+st.title("⚡ Quick Recipe Generator")
 
-if st.button("Generate"):
-    ing_list = [i.strip() for i in ingredients.split(",") if i.strip()]
-    data, code = quick_generate(st.session_state.token, ing_list)
-    if code == 200:
-        rec = data["recipe"]
-        st.subheader(rec["title"])
-        st.write("### Ingredients")
-        st.write(rec["ingredients"])
-        st.write("### Instructions")
-        st.write(rec["instructions"])
+token = st.session_state.get("token")
+if not token:
+    st.error("Please log in first on the main page.")
+    st.stop()
+
+st.write("Type a few ingredients you have right now and AppetIte will suggest a quick recipe.")
+
+ingredients_text = st.text_input(
+    "Ingredients (comma separated)", placeholder="pasta, garlic, olive oil"
+)
+
+if st.button("Generate recipe"):
+    ingredients = [i.strip() for i in ingredients_text.split(",") if i.strip()]
+    if not ingredients:
+        st.warning("Please enter at least one ingredient.")
     else:
-        st.error("Generation failed.")
+        data, code = quick_generate(token, ingredients)
+        if code != 200:
+            st.error(f"Error generating recipe: {data}")
+        else:
+            recipe = data.get("recipe", {})
+            st.markdown(f"### 🍽️ {recipe.get('title', 'Quick recipe')}")
+            cat = recipe.get("category")
+            if cat:
+                label = {
+                    "healthy": "Healthy",
+                    "cheat_meal": "Cheat meal",
+                    "easy_to_cook": "Easy to cook",
+                }.get(cat, cat)
+                st.caption(f"Category: **{label}**")
+
+            ings = recipe.get("ingredients") or []
+            if ings:
+                st.markdown("**Ingredients:**")
+                st.write(", ".join(ings))
+
+            st.markdown("**Instructions:**")
+            st.write(recipe.get("instructions", "No instructions provided."))

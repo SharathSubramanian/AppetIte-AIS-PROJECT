@@ -1,52 +1,46 @@
 # app/services/recipes.py
-from typing import List, Optional
 
-from .. import schemas
-from ..ml.inference import generate_recipe_from_ingredients
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+from ..ml.inference import generate_recipe
 
 
 def recommend_recipes_from_inventory(
     ingredients: List[str],
     category: Optional[str] = None,
-) -> List[schemas.Recipe]:
+    n_recipes: int = 3,
+) -> List[Dict]:
     """
-    Feature 1:
-    Recommend recipes based on pantry inventory, with optional category filter.
+    Recommend 1..n_recipes recipes from pantry inventory.
 
-    For now, we call the same FLAN-based generator once.
-    Later, you can extend this to:
-    - generate multiple recipes
-    - use category-tagging notebook to filter recipes
+    We de-duplicate by recipe title so you don't see the same recipe 3 times.
     """
+    ingredients = [x.strip() for x in ingredients if x and x.strip()]
     if not ingredients:
-        # No pantry items – maybe return an empty list or a fallback recipe
         return []
 
-    parsed = generate_recipe_from_ingredients(ingredients, category=category)
+    recipes: List[Dict] = []
+    seen_titles = set()
+    attempts = 0
 
-    recipe = schemas.Recipe(
-        title=str(parsed["title"]),
-        ingredients=list(parsed["ingredients"]),
-        instructions=str(parsed["instructions"]),
-        category=category,
-    )
+    # Try a few times to encourage diversity; stop early if we can't get more unique titles.
+    while len(recipes) < n_recipes and attempts < n_recipes * 3:
+        raw = generate_recipe(ingredients, category=category, mode="inventory")
+        title_key = raw.get("title", "").strip().lower()
+        if title_key and title_key not in seen_titles:
+            seen_titles.add(title_key)
+            recipes.append(raw)
 
-    return [recipe]
+        attempts += 1
+
+    return recipes
 
 
-def quick_generate_recipe(ingredients: List[str]) -> schemas.Recipe:
+def quick_generate_recipe(ingredients: List[str]) -> Dict:
     """
-    Feature 2:
-    Generate a quick recipe based only on user-provided ingredients.
-    Does not use inventory / pantry.
-
-    We simply call the FLAN-based generator without category.
+    Generate a single "quick" recipe that ignores pantry inventory.
     """
-    parsed = generate_recipe_from_ingredients(ingredients, category=None)
-
-    return schemas.Recipe(
-        title=str(parsed["title"]),
-        ingredients=list(parsed["ingredients"]),
-        instructions=str(parsed["instructions"]),
-        category=None,
-    )
+    ingredients = [x.strip() for x in ingredients if x and x.strip()]
+    return generate_recipe(ingredients, category=None, mode="quick")

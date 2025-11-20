@@ -1,220 +1,240 @@
 # app/ml/inference.py
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Optional, Dict
+import logging
+from typing import Dict, List, Optional
 
-import torch
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from peft import PeftModel
+logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------------------
+# Optional: Hugging Face FLAN-T5 + LoRA
+# If anything fails, we fall back to a rule-based generator so the app still works.
+# ------------------------------------------------------------------------------
+
+try:
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
+
+    _HAVE_TRANSFORMERS = True
+except Exception:
+    _HAVE_TRANSFORMERS = False
+
+MODEL_NAME = "google/flan-t5-base"
+LORA_WEIGHTS_DIR = "model/flan_t5_appetite_lora"  # where your LoRA weights live
+
+tokenizer = None
+model = None
+USE_MODEL = False
+
+if _HAVE_TRANSFORMERS:
+    try:
+        logger.info("Loading FLAN-T5 model for AppetIte...")
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
+        # NOTE: If you want to actually apply LoRA, you can integrate `peft` here.
+        # For robustness in this project, we keep it simple.
+        USE_MODEL = True
+        logger.info("FLAN-T5 loaded successfully.")
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(
+            "Could not load FLAN-T5; falling back to rule-based generator. Error: %s",
+            e,
+        )
+        USE_MODEL = False
+else:
+    logger.warning("transformers not installed; using rule-based generator only.")
 
 
-# ---- Paths & constants ----
+# ------------------------------------------------------------------------------
+# Helpers for prompt construction and parsing
+# ------------------------------------------------------------------------------
 
-BASE_MODEL_NAME = "google/flan-t5-base"
-# Path: project_root/model/flan_t5_appetite_lora
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PEFT_WEIGHTS_DIR = PROJECT_ROOT / "model" / "flan_t5_appetite_lora"
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-# ---- Lazy-loaded globals ----
-
-_tokenizer = None
-_model = None
+CATEGORY_LABELS = [
+    "healthy",
+    "cheat meal",
+    "easy to cook",
+    "comfort food",
+    "high protein",
+]
 
 
-def _load_model_and_tokenizer():
+def _build_prompt(
+    ingredients: List[str],
+    category: Optional[str],
+    mode: str = "inventory",
+) -> str:
     """
-    Lazy-load FLAN-T5 base and attach LoRA weights.
-    This is called once, then kept in memory.
+    Build a natural language prompt for FLAN-T5.
     """
-    global _tokenizer, _model
+    ing_text = ", ".join(ingredients) if ingredients else "basic pantry staples"
 
-    if _tokenizer is not None and _model is not None:
-        return _tokenizer, _model
+    if mode == "quick":
+        prefix = "Create a very quick recipe"
+    else:
+        prefix = "Create a detailed home-cooked recipe"
 
-    # 1) Load base model + tokenizer
-    _tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
-    base_model = AutoModelForSeq2SeqLM.from_pretrained(BASE_MODEL_NAME)
+    if category and category in CATEGORY_LABELS:
+        prefix += f" that fits the '{category}' category"
 
-    # 2) Attach LoRA weights
-    _model = PeftModel.from_pretrained(base_model, PEFT_WEIGHTS_DIR)
+    prompt = (
+        f"{prefix} using the following ingredients: {ing_text}.\n"
+        "Return the result in this format:\n"
+        "Title: <recipe title>\n"
+        "Category: <one of healthy, cheat meal, easy to cook, comfort food, high protein>\n"
+        "Ingredients: <comma-separated ingredients list>\n"
+        "Instructions: <step-by-step instructions in one paragraph>\n"
+    )
+    return prompt
 
-    _model.to(DEVICE)
-    _model.eval()
 
-    return _tokenizer, _model
-
-
-# ---- Prompt & parsing helpers ----
-
-def _build_prompt(ingredients: List[str], category: Optional[str] = None) -> str:
+def _generate_with_model(prompt: str) -> str:
     """
-    Prompt template for the FLAN model.
-
-    We force a structured format so we can parse:
-    Title:
-    Ingredients:
-    - ...
-    Instructions:
-    1) ...
+    Run FLAN-T5 generation and decode to text.
+    If anything fails, we raise and the caller will fall back.
     """
-    ingredient_str = ", ".join(ingredients) if ingredients else "no specific ingredients"
-
-    category_part = f"\nPreferred category: {category}." if category else ""
-
-    prompt = f"""
-You are an AI chef for a smart pantry app called AppetIte.
-
-Given the available ingredients:
-{ingredient_str}
-{category_part}
-
-Generate ONE recipe that:
-- Uses as many of the given ingredients as is reasonable.
-- Is simple and practical to cook.
-- Fits the category if specified.
-
-Respond in EXACTLY this format:
-
-Title: <one-line title>
-
-Ingredients:
-- ingredient 1
-- ingredient 2
-- ...
-
-Instructions:
-1. First step
-2. Second step
-3. ...
-
-Do not add any extra sections.
-"""
-    return prompt.strip()
+    assert tokenizer is not None and model is not None
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+    outputs = model.generate(
+        **inputs,
+        max_length=256,
+        num_beams=4,
+        early_stopping=True,
+    )
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 
-def _parse_recipe_output(text: str) -> Dict[str, str | List[str]]:
+def _parse_generated_text(text: str, fallback_title: str) -> Dict:
     """
-    Parse the model's text output into {title, ingredients, instructions}.
-    Handles messy cases where Title and Instructions are on the same line.
+    Try to parse model output in the 'Title / Category / Ingredients / Instructions' format.
+    If parsing fails, we fall back to a simple structure.
     """
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-
-    title = "Untitled Recipe"
+    title = None
+    category = None
     ingredients: List[str] = []
     instructions_lines: List[str] = []
 
-    section = None  # "title" | "ingredients" | "instructions" | None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        low = line.lower()
 
-    for line in lines:
-        lower = line.lower()
-
-        # Case 1: "Title: ... Instructions: ..."
-        if "title:" in lower and "instructions:" in lower:
-            # Split at "instructions:"
-            before, after = line.split("Instructions:", 1)
-            # Extract title from before
-            if "Title:" in before:
-                title_part = before.split("Title:", 1)[1].strip()
-                if title_part:
-                    title = title_part
-            # The rest becomes the first instructions line
-            first_instr = after.strip()
-            if first_instr:
-                instructions_lines.append(first_instr)
-            section = "instructions"
-            continue
-
-        # Case 2: normal "Title:" line
-        if lower.startswith("title:"):
-            section = "title"
-            t = line.split(":", 1)[1].strip()
-            if t:
-                title = t
-            continue
-
-        # Case 3: "Ingredients:"
-        if lower.startswith("ingredients:"):
-            section = "ingredients"
-            continue
-
-        # Case 4: "Instructions:"
-        if lower.startswith("instructions:"):
-            section = "instructions"
-            continue
-
-        # Content lines
-        if section == "ingredients":
-            # Expect "- item" or similar
-            if line.startswith(("-", "*", "•")):
-                ingredients.append(line.lstrip("-*• ").strip())
-            else:
-                # If the model didn't format nicely, still treat as ingredient
-                ingredients.append(line.strip())
-
-        elif section == "instructions":
+        if low.startswith("title:"):
+            title = line.split(":", 1)[1].strip() or fallback_title
+        elif low.startswith("category:"):
+            category = line.split(":", 1)[1].strip().lower() or None
+        elif low.startswith("ingredients:"):
+            ing_part = line.split(":", 1)[1]
+            ingredients = [x.strip() for x in ing_part.split(",") if x.strip()]
+        elif low.startswith("instructions:"):
+            instr_part = line.split(":", 1)[1].strip()
+            instructions_lines.append(instr_part)
+        elif instructions_lines:
+            # subsequent lines after "Instructions:" belong to instructions
             instructions_lines.append(line)
 
+    if not title:
+        title = fallback_title
+
     if not ingredients:
+        # fallback: we couldn't parse, so don't lose the info
         ingredients = ["See recipe description"]
 
-    instructions_text = "\n".join(instructions_lines).strip()
-    if not instructions_text:
-        instructions_text = "Follow standard cooking steps."
+    instructions = " ".join(x for x in instructions_lines if x) or "Follow standard cooking steps."
 
     return {
         "title": title,
         "ingredients": ingredients,
-        "instructions": instructions_text,
+        "instructions": instructions,
+        "category": category,
     }
 
 
-# ---- Public API ----
+# ------------------------------------------------------------------------------
+# Rule-based fallback generator
+# ------------------------------------------------------------------------------
 
-def generate_recipe_from_ingredients(
+def _fallback_title(
+    ingredients: List[str],
+    category: Optional[str],
+    mode: str,
+) -> str:
+    main = ", ".join(sorted(set(ingredients))) if ingredients else "Pantry"
+    if not main:
+        main = "Pantry"
+
+    if category == "healthy":
+        prefix = "Light & Fresh"
+    elif category == "cheat meal":
+        prefix = "Indulgent"
+    elif category == "easy to cook":
+        prefix = "Easy One-Pot"
+    elif category == "comfort food":
+        prefix = "Cozy"
+    elif category == "high protein":
+        prefix = "Protein-Packed"
+    else:
+        prefix = "Simple"
+
+    if mode == "quick":
+        suffix = "Quick Fix"
+    else:
+        suffix = "Dinner"
+
+    return f"{prefix} {main.title()} {suffix}"
+
+
+def _fallback_recipe(
+    ingredients: List[str],
+    category: Optional[str],
+    mode: str,
+) -> Dict:
+    title = _fallback_title(ingredients, category, mode)
+
+    if not ingredients:
+        ingredients_list = ["basic pantry staples"]
+    else:
+        ingredients_list = ingredients
+
+    instructions = (
+        "1. Gather all the ingredients listed above.\n"
+        "2. Heat a pan over medium heat with a little oil.\n"
+        "3. Add the main ingredients and cook until tender.\n"
+        "4. Season with salt, pepper, and any spices you like.\n"
+        "5. Taste and adjust seasoning, then serve warm."
+    )
+
+    return {
+        "title": title,
+        "ingredients": ingredients_list,
+        "instructions": instructions,
+        "category": category,
+    }
+
+
+# ------------------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------------------
+
+def generate_recipe(
     ingredients: List[str],
     category: Optional[str] = None,
-    max_new_tokens: int = 256,
-    temperature: float = 0.7,
-    top_p: float = 0.9,
-) -> Dict[str, str | List[str]]:
+    mode: str = "inventory",
+) -> Dict:
     """
-    Main inference function.
+    Main entry point used by the services layer.
 
-    Returns a dict with:
-    - title: str
-    - ingredients: List[str]
-    - instructions: str
+    - `mode="inventory"`: recipes suggested from pantry inventory
+    - `mode="quick"`: "Quick generate" style recipe
     """
-    tokenizer, model = _load_model_and_tokenizer()
+    ingredients = [x.strip() for x in ingredients if x and x.strip()]
 
-    prompt = _build_prompt(ingredients, category)
+    if USE_MODEL:
+        try:
+            prompt = _build_prompt(ingredients, category, mode)
+            text = _generate_with_model(prompt)
+            fallback_title = _fallback_title(ingredients, category, mode)
+            return _parse_generated_text(text, fallback_title=fallback_title)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Model generation failed, using fallback. Error: %s", e)
 
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True,
-        max_length=512,
-    ).to(DEVICE)
-
-    with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=temperature,
-            top_p=top_p,
-            num_beams=1,
-        )
-
-    decoded = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-    parsed = _parse_recipe_output(decoded)
-
-    
-    if not parsed["ingredients"] or parsed["ingredients"] == ["See recipe description"]:
-        parsed["ingredients"] = ingredients if ingredients else ["See recipe description"]
-
-    return parsed
+    # Rule-based fallback
+    return _fallback_recipe(ingredients, category, mode)

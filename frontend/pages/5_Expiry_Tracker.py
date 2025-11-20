@@ -1,26 +1,37 @@
+# frontend/pages/5_Expiry_Tracker.py
+
 import streamlit as st
-from utils.api import get_pantry
-from datetime import datetime
+
+from utils.api import get_expiring_items
 
 st.title("⏳ Expiry Tracker")
 
-data, code = get_pantry(st.session_state.token)
+token = st.session_state.get("token")
+if not token:
+    st.warning("Please log in from the main page first.")
+    st.stop()
 
-if code == 200:
-    for item in data:
-        expiry = item["expiry_date"]
-        if expiry:
-            exp_date = datetime.strptime(expiry, "%Y-%m-%d")
-            days_left = (exp_date - datetime.now()).days
+st.write(
+    "Track which pantry items are expiring soon so you can prioritize using them."
+)
 
-            color = "red" if days_left <= 2 else "orange" if days_left <= 5 else "green"
+days = st.slider("Show items expiring in the next (days)", min_value=1, max_value=30, value=7)
 
-            st.markdown(
-                f"**{item['name']}** — *{item['quantity']} {item['unit']}*  
-                **Expiry:** `{expiry}`  
-                **Days left:** <span style='color:{color}; font-weight:bold;'>{days_left}</span>",
-                unsafe_allow_html=True
-            )
-            st.write("---")
-else:
-    st.error("Could not load expiry data.")
+if st.button("🔍 Check expiring items"):
+    data, code = get_expiring_items(token, days=days)
+    if code == 200 and isinstance(data, list):
+        if not data:
+            st.success(f"No items expiring in the next {days} days. Nice job!")
+        else:
+            st.subheader("Items expiring soon")
+            for item in data:
+                name = item.get("name", "Unknown")
+                quantity = item.get("quantity", "?")
+                unit = item.get("unit", "")
+                expiry_date = item.get("expiry_date", "N/A")
+                st.write(
+                    f"**{name}** — *{quantity} {unit}*  "
+                    f"(expires on `{expiry_date}`)"
+                )
+    else:
+        st.error(f"Could not fetch expiring items: {data}")

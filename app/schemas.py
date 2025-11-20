@@ -1,9 +1,11 @@
+# app/schemas.py
 from datetime import datetime, date
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 
 
+# ---------- User ----------
 
 class UserBase(BaseModel):
     username: str
@@ -11,11 +13,6 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str
-
-
-class UserLogin(BaseModel):
-    username: str
     password: str
 
 
@@ -27,25 +24,18 @@ class UserRead(UserBase):
         from_attributes = True
 
 
+# ---------- Pantry ----------
 
 class PantryItemBase(BaseModel):
     name: str
     category: Optional[str] = None
-    quantity: float = 1.0
-    unit: str = "unit"
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
     expiry_date: Optional[date] = None
 
 
 class PantryItemCreate(PantryItemBase):
     pass
-
-
-class PantryItemUpdate(BaseModel):
-    name: Optional[str] = None
-    category: Optional[str] = None
-    quantity: Optional[float] = None
-    unit: Optional[str] = None
-    expiry_date: Optional[date] = None
 
 
 class PantryItemRead(PantryItemBase):
@@ -56,16 +46,18 @@ class PantryItemRead(PantryItemBase):
         from_attributes = True
 
 
-# ---------- Recipes / Recommendations ----------
+# ---------- Recipes / Generation ----------
 
-class RecommendationRequest(BaseModel):
-    category: Optional[str] = None  
 
 
 class Recipe(BaseModel):
     title: str
     ingredients: List[str]
     instructions: str
+    category: Optional[str] = None
+
+
+class RecommendationRequest(BaseModel):
     category: Optional[str] = None
 
 
@@ -77,10 +69,15 @@ class QuickGenerateResponse(BaseModel):
     recipe: Recipe
 
 
+# ---------- Shopping list ----------
 
 class ShoppingListCreate(BaseModel):
     recipe_name: str
     recipe_ingredients: List[str]
+# app/schemas.py
+
+class CookRequest(BaseModel):
+    ingredients: List[str]
 
 
 class ShoppingListRead(BaseModel):
@@ -92,3 +89,12 @@ class ShoppingListRead(BaseModel):
 
     class Config:
         from_attributes = True
+# app/schemas.py 
+
+from typing import List
+from pydantic import BaseModel
+
+
+class CookRequest(BaseModel):
+    recipe_name: str
+    recipe_ingredients: List[str]
