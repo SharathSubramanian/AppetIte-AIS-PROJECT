@@ -1,136 +1,177 @@
 from datetime import timedelta
+import json
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from .database import Base, engine, get_db
 from . import models, schemas
-from .auth import authenticate_user, create_access_token, get_password_hash
-from .deps import get_current_user_dep
-
-# Services
+from .database import engine, Base
+from .auth import (
+    get_password_hash,
+    authenticate_user,
+    create_access_token,
+)
+from .deps import get_db_dep, get_current_user_dep
 from .services import pantry as pantry_service
 from .services import recipes as recipes_service
 from .services import shopping as shopping_service
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AppetIte Backend", version="1.0")
+app = FastAPI(
+    title="AppetIte Backend",
+    description="Backend API for AppetIte project",
+    version="0.2.0",
+)
 
 
-# -------------------- AUTH --------------------
-@app.post("/signup", response_model=schemas.UserRead)
-def signup(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
+# ---------- Auth / Users ----------
+
+@app.post("/signup", response_model=schemas.UserRead, status_code=status.HTTP_201_CREATED)
+def signup(user_in: schemas.UserCreate, db: Session = Depends(get_db_dep)):
     existing = db.query(models.User).filter(models.User.username == user_in.username).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=400, detail="Username already taken.")
 
-    new_user = models.User(
+    user = models.User(
         username=user_in.username,
         email=user_in.email,
-        password_hash=get_password_hash(user_in.password)
+        password_hash=get_password_hash(user_in.password),
     )
-    db.add(new_user)
+    db.add(user)
     db.commit()
-    db.refresh(new_user)
-
-    return new_user
-
-
-@app.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
-
-    access_token_expires = timedelta(hours=24)
-
-    token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires
-    )
-
-    return {"access_token": token, "token_type": "bearer"}
-
-
-@app.get("/me", response_model=schemas.UserRead)
-def me(user: models.User = Depends(get_current_user_dep)):
+    db.refresh(user)
     return user
 
 
-# -------------------- PANTRY --------------------
-@app.get("/pantry", response_model=List[schemas.PantryItemRead])
+@app.post("/login")
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db_dep),
+):
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password.",
+        )
+    access_token_expires = timedelta(minutes=60 * 24)
+    access_token = create_access_token(
+        data={"sub": user.username},
+        expires_delta=access_token_expires,
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.get("/me", response_model=schemas.UserRead)
+def read_me(current_user: models.User = Depends(get_current_user_dep)):
+    return current_user
+
+
+# ---------- Pantry ----------
+
+@app.post("/pantry/", response_model=schemas.PantryItemRead, status_code=201)
+def add_pantry_item(
+    item_in: schemas.PantryItemCreate,
+    db: Session = Depends(get_db_dep),
+    current_user: models.User = Depends(get_current_user_dep),
+):
+    item = pantry_service.create_pantry_item(db, current_user.id, item_in)
+    return item
+
+
+@app.get("/pantry/", response_model=List[schemas.PantryItemRead])
 def list_pantry(
     category: Optional[str] = None,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user_dep),
+    db: Session = Depends(get_db_dep),
+    current_user: models.User = Depends(get_current_user_dep),
 ):
-    return pantry_service.list_pantry_items(db, user.id, category)
+    items = pantry_service.list_pantry_items(db, current_user.id, category)
+    return items
 
 
-@app.post("/pantry", response_model=schemas.PantryItemRead)
-def add_pantry_item(
-    item: schemas.PantryItemCreate,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user_dep),
-):
-    return pantry_service.create_pantry_item(db, user.id, item)
+# ---------- Recommendations ----------
 
-
-# -------------------- RECOMMENDATIONS --------------------
 @app.post("/recommendations", response_model=List[schemas.Recipe])
-def recommend(
+def get_recommendations(
     req: schemas.RecommendationRequest,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user_dep),
+    db: Session = Depends(get_db_dep),
+    current_user: models.User = Depends(get_current_user_dep),
 ):
-    pantry_items = pantry_service.list_pantry_items(db, user.id, req.category)
-    ingredients = [p.name for p in pantry_items]
+    pantry_items = pantry_service.list_pantry_items(db, current_user.id)
+    ingredients = [item.name for item in pantry_items]
 
-    return recipes_service.recommend_recipes_from_inventory(ingredients, req.category)
+    recipes = recipes_service.recommend_recipes_from_inventory(
+        ingredients=ingredients,
+        category=req.category,
+        max_recipes=5,
+    )
+    return recipes
 
 
-# -------------------- QUICK GENERATE --------------------
+# ---------- Quick Generate (not using pantry) ----------
+
 @app.post("/quick-generate", response_model=schemas.QuickGenerateResponse)
 def quick_generate(
     req: schemas.QuickGenerateRequest,
-    user: models.User = Depends(get_current_user_dep)
+    current_user: models.User = Depends(get_current_user_dep),
 ):
     recipe = recipes_service.quick_generate_recipe(req.ingredients)
     return schemas.QuickGenerateResponse(recipe=recipe)
 
 
-# -------------------- SHOPPING LIST --------------------
+# ---------- Shopping List ----------
+
 @app.post("/shopping-list", response_model=schemas.ShoppingListRead)
 def create_shopping_list(
     req: schemas.ShoppingListCreate,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user_dep),
+    db: Session = Depends(get_db_dep),
+    current_user: models.User = Depends(get_current_user_dep),
 ):
-    pantry_items = pantry_service.list_pantry_items(db, user.id)
-    missing = shopping_service.compute_shopping_list_items(req.recipe_ingredients, pantry_items)
-
-    sl = models.ShoppingList(
-        user_id=user.id,
-        recipe_name=req.recipe_name,
-        items_json=missing,
+    pantry_items = pantry_service.list_pantry_items(db, current_user.id)
+    missing = shopping_service.compute_shopping_list_items(
+        recipe_ingredients=req.recipe_ingredients,
+        pantry_items=pantry_items,
     )
 
+    items_json = json.dumps(missing)
+    sl = models.ShoppingList(
+        user_id=current_user.id,
+        recipe_name=req.recipe_name,
+        items_json=items_json,
+    )
     db.add(sl)
     db.commit()
     db.refresh(sl)
 
-    return sl
+    return schemas.ShoppingListRead(
+        id=sl.id,
+        recipe_name=sl.recipe_name,
+        items=missing,
+        created_at=sl.created_at,
+        is_completed=sl.is_completed,
+    )
 
 
-# -------------------- COOK (DELETE INGREDIENTS USED) --------------------
-@app.post("/cook", status_code=200)
+# ---------- Cook (consume pantry ingredients) ----------
+
+@app.post("/cook", response_model=schemas.CookResponse)
 def cook_recipe(
     req: schemas.CookRequest,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user_dep),
+    db: Session = Depends(get_db_dep),
+    current_user: models.User = Depends(get_current_user_dep),
 ):
-    pantry_service.consume_ingredients(db, user.id, req.ingredients)
-    return {"message": "Recipe cooked! Ingredients removed."}
+    removed = pantry_service.consume_ingredients(db, current_user.id, req.ingredients)
+    removed_items = [schemas.PantryItemRead.model_validate(item) for item in removed]
+
+    msg = f"Cooked '{req.recipe_title}'. Removed {len(removed_items)} pantry items."
+    return schemas.CookResponse(message=msg, removed_items=removed_items)
+
+
+# ---------- Health ----------
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}

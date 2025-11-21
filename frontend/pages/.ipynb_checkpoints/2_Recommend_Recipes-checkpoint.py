@@ -1,112 +1,140 @@
-# frontend/pages/2_Recommend_Recipes.py
-
-from typing import List
+from typing import List, Dict, Any
 
 import streamlit as st
 
-from utils.api import (
-    create_shopping_list,
-    cook_recipe,
-    get_pantry,
-    get_recommendations,
-)
+from utils.api import get_pantry, get_recommendations, delete_pantry_item
 
-st.title("🧠 Recommended Recipes")
+
+st.set_page_config(page_title="AppetIte Recommendations", page_icon="🍽️", layout="centered")
 
 token = st.session_state.get("token")
 if not token:
-    st.warning("Please log in from the main page first.")
+    st.warning("Please log in first.")
     st.stop()
 
-st.write(
-    "These recipes are generated from your current pantry. "
-    "Pick a category to nudge the style of the recipe."
+st.title("🍽️ Recommended Recipes from Your Pantry")
+
+# Load pantry once
+pantry_resp = get_pantry(token)
+if pantry_resp["code"] != 200:
+    st.error(f"Could not load pantry: {pantry_resp['message']}")
+    st.stop()
+
+pantry_items: List[Dict[str, Any]] = pantry_resp["data"] or []
+
+category = st.selectbox(
+    "Choose a style",
+    [
+        "Any",
+        "Healthy",
+        "Quick & Easy",
+        "Comfort / Cheat Meal",
+        "High Protein",
+        "Budget Friendly",
+    ],
+    index=0,
 )
 
-CATEGORY_OPTIONS = {
-    "Any": None,
-    "Healthy": "healthy",
-    "Cheat meal": "cheat meal",
-    "Easy to cook": "easy to cook",
-    "Comfort food": "comfort food",
-    "High protein": "high protein",
-}
+if st.button("Get recipes"):
+    st.session_state["recommend_category"] = category
 
-col_cat, col_btn = st.columns([2, 1])
+selected_category = st.session_state.get("recommend_category", "Any")
 
-with col_cat:
-    category_label = st.selectbox("Filter by category", list(CATEGORY_OPTIONS.keys()))
-    selected_category = CATEGORY_OPTIONS[category_label]
-
-with col_btn:
-    if st.button("🔍 Get recommendations"):
-        data, code = get_recommendations(token, category=selected_category)
-        if code == 200 and isinstance(data, list):
-            st.session_state["recommended_recipes"] = data
-        else:
-            st.error(f"Could not fetch recommendations: {data}")
-
-recipes: List[dict] = st.session_state.get("recommended_recipes", [])
-
-if not recipes:
-    st.info("No recipes yet — click **Get recommendations** to generate some.")
+if "recommend_category" not in st.session_state:
+    st.info("Choose a style and click **Get recipes** to see suggestions.")
     st.stop()
 
-st.subheader("Suggestions based on your pantry")
+st.write(f"Showing recipes for: **{selected_category}**")
 
-for idx, recipe in enumerate(recipes):
-    title = recipe.get("title", f"Recipe {idx+1}")
-    category = recipe.get("category")
-    ingredients = recipe.get("ingredients", [])
-    instructions = recipe.get("instructions", "")
+rec_resp = get_recommendations(token, selected_category)
+if rec_resp["code"] != 200:
+    st.error(f"Failed to get recipes: {rec_resp['message']}")
+    st.stop()
 
-    header = title
-    if category:
-        header += f"  •  _{category}_"
+recipes: List[Dict[str, Any]] = rec_resp["data"] or []
 
-    with st.expander(header, expanded=False):
-        st.markdown("**Ingredients**")
-        if ingredients:
-            for ing in ingredients:
-                st.write(f"- {ing}")
-        else:
-            st.write("No ingredient list provided.")
 
-        st.markdown("**Instructions**")
-        st.write(instructions or "No instructions provided.")
+def _clean_title(title: str) -> str:
+    title = (title or "Untitled Recipe").strip()
+    if not title:
+        return "Untitled Recipe"
+    # Capitalize nicely
+    return title[0].upper() + title[1:]
 
-        c1, c2 = st.columns(2)
 
-        with c1:
-            if st.button("🛒 Create shopping list", key=f"shop_{idx}"):
-                data, code = create_shopping_list(
-                    token,
-                    recipe_name=title,
-                    recipe_ingredients=ingredients,
-                )
-                if code in (200, 201):
-                    missing = data.get("items", [])
-                    if missing:
-                        st.success(
-                            "Shopping list created. You need to buy:\n"
-                            + ", ".join(missing)
-                        )
+# Deduplicate by title (case-insensitive)
+seen = set()
+unique_recipes: List[Dict[str, Any]] = []
+for r in recipes:
+    t = _clean_title(r.get("title", "Untitled Recipe"))
+    key = t.lower()
+    if key in seen:
+        continue
+    seen.add(key)
+    r["title"] = t
+    unique_recipes.append(r)
+
+recipes = unique_recipes
+
+
+def _match_pantry_for_recipe(recipe: Dict[str, Any], pantry: List[Dict[str, Any]]) -> List[int]:
+    """
+    Very simple matching:
+    - Lowercase ingredient strings
+    - Lowercase pantry item names
+    - If ingredient and item name overlap (substring), we treat it as "used".
+    Returns list of pantry item IDs to delete.
+    """
+    ingredient_names = [str(x).lower() for x in recipe.get("ingredients", [])]
+    matched_ids = set()
+
+    for item in pantry:
+        item_name = str(item.get("name", "")).lower()
+        item_id = item.get("id")
+        if not item_id:
+            continue
+        for ing in ingredient_names:
+            if item_name and (item_name in ing or ing in item_name):
+                matched_ids.add(item_id)
+                break
+
+    return list(matched_ids)
+
+
+if not recipes:
+    st.info("No recipes found from your pantry yet. Try adding more items.")
+else:
+    st.subheader("Suggestions")
+
+    for idx, recipe in enumerate(recipes):
+        title = _clean_title(recipe.get("title", "Untitled Recipe"))
+        category_tag = recipe.get("category") or selected_category
+        ingredients = recipe.get("ingredients", [])
+        instructions = recipe.get("instructions", "")
+
+        with st.expander(f"{title}  —  *{category_tag}*"):
+            st.markdown("**Ingredients:**")
+            if ingredients:
+                for ing in ingredients:
+                    st.markdown(f"- {ing}")
+            else:
+                st.write("No ingredient list available.")
+
+            st.markdown("**Instructions:**")
+            st.write(instructions or "No instructions provided.")
+
+            if st.button("🍳 Cook this", key=f"cook-{idx}"):
+                used_ids = _match_pantry_for_recipe(recipe, pantry_items)
+                if not used_ids:
+                    st.warning("None of your pantry items matched this recipe's ingredients.")
+                else:
+                    failed = False
+                    for pid in used_ids:
+                        del_resp = delete_pantry_item(token, pid)
+                        if del_resp["code"] not in (200, 204):
+                            failed = True
+                    if failed:
+                        st.error("Some items could not be removed from pantry.")
                     else:
-                        st.success(
-                            "You already have everything in your pantry for this recipe! 🎉"
-                        )
-                else:
-                    st.error(f"Failed to create shopping list: {data}")
-
-        with c2:
-            if st.button("🍳 Cook!", key=f"cook_{idx}"):
-                data, code = cook_recipe(
-                    token,
-                    recipe_name=title,
-                    recipe_ingredients=ingredients,
-                )
-                if code == 200:
-                    st.success("Marked as cooked. Pantry has been updated.")
-                    # Optional: refresh pantry in the background; user can see it on Pantry tab.
-                else:
-                    st.error(f"Failed to cook recipe: {data}")
+                        st.success("Pantry updated for this recipe. Happy cooking! 🍳")
+                    st.rerun()

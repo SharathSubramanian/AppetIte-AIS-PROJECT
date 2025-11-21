@@ -1,5 +1,4 @@
-# app/services/pantry.py
-from datetime import date, timedelta
+from datetime import date
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -14,7 +13,7 @@ def create_pantry_item(
 ) -> models.PantryItem:
     item = models.PantryItem(
         user_id=user_id,
-        name=item_in.name,
+        name=item_in.name.strip(),
         category=item_in.category,
         quantity=item_in.quantity,
         unit=item_in.unit,
@@ -37,22 +36,31 @@ def list_pantry_items(
     return q.order_by(models.PantryItem.created_at.desc()).all()
 
 
-def get_expiring_items(
+def consume_ingredients(
     db: Session,
     user_id: int,
-    days: int = 7,
-):
-    today = date.today()
-    cutoff = today + timedelta(days=days)
+    ingredients: List[str],
+) -> List[models.PantryItem]:
+    """
+    Very simple "cook" logic:
+    - Normalize ingredient names to lowercase
+    - Remove pantry items where `name` is in the ingredient list.
+    """
+    normalized = {ing.strip().lower() for ing in ingredients if ing.strip()}
+    if not normalized:
+        return []
 
-    return (
+    items = (
         db.query(models.PantryItem)
-        .filter(
-            models.PantryItem.user_id == user_id,
-            models.PantryItem.expiry_date.is_not(None),
-            models.PantryItem.expiry_date >= today,
-            models.PantryItem.expiry_date <= cutoff,
-        )
-        .order_by(models.PantryItem.expiry_date.asc())
+        .filter(models.PantryItem.user_id == user_id)
         .all()
     )
+
+    removed: List[models.PantryItem] = []
+    for item in items:
+        if item.name.lower() in normalized:
+            removed.append(item)
+            db.delete(item)
+
+    db.commit()
+    return removed

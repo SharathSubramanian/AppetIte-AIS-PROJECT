@@ -1,46 +1,83 @@
-# frontend/pages/4_Shopping_List.py
+from typing import List, Dict, Any
 
 import streamlit as st
-from utils.api import create_shopping_list
 
-st.set_page_config(page_title="Shopping List", page_icon="🛒")
+from utils.api import get_pantry, create_shopping_list
 
-st.title("🛒 Shopping List Helper")
+
+st.set_page_config(page_title="Shopping List", page_icon="🛒", layout="centered")
 
 token = st.session_state.get("token")
 if not token:
-    st.error("Please log in first on the main page.")
+    st.warning("Please log in first.")
     st.stop()
 
+st.title("🛒 Shopping List Helper")
+
 st.write(
-    "Paste the recipe name and its ingredients. "
-    "AppetIte will compare with your pantry and tell you what to buy."
+    "Paste or type the ingredients for a recipe and let AppetIte compare "
+    "them against your pantry to find what you need to buy."
 )
 
-with st.form("shopping_list_form"):
-    recipe_name = st.text_input("Recipe name", placeholder="Tomato Pasta")
-    ingredients_text = st.text_area(
-        "Recipe ingredients (comma separated)",
-        placeholder="pasta, tomato, garlic, olive oil, salt",
-    )
-    submitted = st.form_submit_button("Generate shopping list")
+# Load pantry for display
+pantry_resp = get_pantry(token)
+if pantry_resp["code"] != 200:
+    st.error(f"Could not load pantry: {pantry_resp['message']}")
+    st.stop()
 
-if submitted:
-    ingredients = [i.strip() for i in ingredients_text.split(",") if i.strip()]
-    if not recipe_name:
-        st.warning("Please enter a recipe name.")
-    elif not ingredients:
-        st.warning("Please enter at least one ingredient.")
+pantry_items: List[Dict[str, Any]] = pantry_resp["data"] or []
+
+with st.expander("View current pantry"):
+    if not pantry_items:
+        st.info("Your pantry is empty.")
     else:
-        data, code = create_shopping_list(token, recipe_name, ingredients)
-        if code != 200:
-            st.error(f"Error creating shopping list: {data}")
+        for item in pantry_items:
+            st.markdown(
+                f"**{item.get('name', '')}** — "
+                f"{item.get('quantity', '')} {item.get('unit', '')} "
+                f"({item.get('category', '')})"
+            )
+
+st.subheader("Recipe ingredients")
+
+recipe_name = st.text_input("Recipe name", value="My Dish")
+ingredients_text = st.text_area(
+    "List ingredients (one per line or comma separated)",
+    placeholder="Example:\n"
+    "tomato\n"
+    "onion\n"
+    "garlic\n"
+    "olive oil\n"
+    "basil",
+)
+
+if st.button("Generate shopping list"):
+    raw = ingredients_text.strip()
+    if not raw:
+        st.error("Please enter at least one ingredient.")
+    else:
+        # Accept both line and comma separated
+        lines = []
+        for line in raw.splitlines():
+            parts = [p.strip() for p in line.split(",") if p.strip()]
+            lines.extend(parts)
+
+        recipe_ingredients: List[str] = lines
+
+        resp = create_shopping_list(token, recipe_name, recipe_ingredients)
+        if resp["code"] != 200:
+            st.error(f"Could not compute shopping list: {resp['message']}")
         else:
-            st.success(f"Shopping list created for **{recipe_name}**.")
-            missing = data.get("items", [])
-            if not missing:
-                st.info("You already have everything in your pantry. No need to buy anything!")
+            data = resp["data"] or {}
+            missing_items = data.get("items", [])
+
+            st.subheader("Missing ingredients")
+
+            if not missing_items:
+                st.success("You already have everything you need in your pantry. 🎉")
             else:
-                st.subheader("You need to buy:")
-                for item in missing:
-                    st.markdown(f"- {item}")
+                for item in missing_items:
+                    name = item.get("name", "")
+                    qty = item.get("quantity", "")
+                    unit = item.get("unit", "")
+                    st.markdown(f"- **{name}** — {qty} {unit}")

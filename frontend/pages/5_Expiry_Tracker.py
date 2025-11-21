@@ -1,37 +1,72 @@
-# frontend/pages/5_Expiry_Tracker.py
+from datetime import date, datetime
+from typing import List, Dict, Any
 
 import streamlit as st
 
-from utils.api import get_expiring_items
+from utils.api import get_pantry
 
-st.title("⏳ Expiry Tracker")
+
+st.set_page_config(page_title="Expiry Tracker", page_icon="⏰", layout="centered")
 
 token = st.session_state.get("token")
 if not token:
-    st.warning("Please log in from the main page first.")
+    st.warning("Please log in first.")
     st.stop()
 
-st.write(
-    "Track which pantry items are expiring soon so you can prioritize using them."
-)
+st.title("⏰ Expiry Tracker")
 
-days = st.slider("Show items expiring in the next (days)", min_value=1, max_value=30, value=7)
+resp = get_pantry(token)
+if resp["code"] != 200:
+    st.error(f"Could not load pantry: {resp['message']}")
+    st.stop()
 
-if st.button("🔍 Check expiring items"):
-    data, code = get_expiring_items(token, days=days)
-    if code == 200 and isinstance(data, list):
-        if not data:
-            st.success(f"No items expiring in the next {days} days. Nice job!")
+items: List[Dict[str, Any]] = resp["data"] or []
+
+today = date.today()
+exp_items: List[Dict[str, Any]] = []
+
+for item in items:
+    exp_str = item.get("expiry_date")
+    if not exp_str:
+        continue
+    try:
+        exp_date = datetime.fromisoformat(exp_str).date()
+    except Exception:
+        # If parsing fails, skip this item
+        continue
+    days_left = (exp_date - today).days
+    item_copy = dict(item)
+    item_copy["days_left"] = days_left
+    exp_items.append(item_copy)
+
+if not exp_items:
+    st.info("No expiry information found. Add expiry dates when you create pantry items.")
+else:
+    # Sort by soonest expiry
+    exp_items.sort(key=lambda x: x["days_left"])
+
+    st.subheader("Items nearing expiry")
+
+    for item in exp_items:
+        name = item.get("name", "")
+        qty = item.get("quantity", "")
+        unit = item.get("unit", "")
+        days_left = item["days_left"]
+
+        if days_left < 0:
+            label = "Expired"
+            color = "🚨"
+        elif days_left == 0:
+            label = "Expires today"
+            color = "⚠️"
+        elif days_left <= 3:
+            label = f"Expires in {days_left} day(s)"
+            color = "⚠️"
         else:
-            st.subheader("Items expiring soon")
-            for item in data:
-                name = item.get("name", "Unknown")
-                quantity = item.get("quantity", "?")
-                unit = item.get("unit", "")
-                expiry_date = item.get("expiry_date", "N/A")
-                st.write(
-                    f"**{name}** — *{quantity} {unit}*  "
-                    f"(expires on `{expiry_date}`)"
-                )
-    else:
-        st.error(f"Could not fetch expiring items: {data}")
+            label = f"Expires in {days_left} day(s)"
+            color = "✅"
+
+        st.markdown(
+            f"{color} **{name}** — *{qty} {unit}*  \n"
+            f"&nbsp;&nbsp;&nbsp;&nbsp;{label}"
+        )

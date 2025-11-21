@@ -1,80 +1,94 @@
-# frontend/utils/api.py
-
-from __future__ import annotations
-
-from typing import Any, Dict, List, Optional, Tuple
+import os
+from typing import List, Optional, Dict, Any
 
 import requests
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = os.getenv("APPETITE_API_URL", "http://127.0.0.1:8000")
 
 
-def _handle_request(func, *args, **kwargs) -> Tuple[Any, int]:
+def _handle_response(resp: requests.Response) -> Dict[str, Any]:
+    """
+    Wrap all backend responses into a unified structure:
+    {
+        "code": <status_code>,
+        "data": <parsed JSON or None>,
+        "message": <OK or error text>
+    }
+    """
+    status = resp.status_code
     try:
-        r = func(*args, **kwargs)
-        try:
-            data = r.json()
-        except Exception:
-            data = r.text
-        return data, r.status_code
-    except Exception as e:  # pragma: no cover - defensive
-        return {"detail": f"Request error: {e}"}, 0
+        data = resp.json()
+    except Exception:
+        text = resp.text.strip()
+        return {
+            "code": status,
+            "data": None,
+            "message": f"Non-JSON response ({status}): {text[:200]}",
+        }
+
+    # Try to extract a meaningful message
+    msg = "OK"
+    if not (200 <= status < 300):
+        if isinstance(data, dict) and "detail" in data:
+            msg = str(data["detail"])
+        else:
+            msg = str(data)
+
+    return {"code": status, "data": data, "message": msg}
 
 
-# ------------------------------------------------------------------------------
-# Auth
-# ------------------------------------------------------------------------------
+# ---------- AUTH ----------
 
-def signup(username: str, email: str, password: str) -> Tuple[Any, int]:
+
+def signup(username: str, email: str, password: str) -> Dict[str, Any]:
     payload = {"username": username, "email": email, "password": password}
-    return _handle_request(
-        requests.post,
-        f"{BASE_URL}/signup",
-        json=payload,
-        timeout=15,
-    )
+    resp = requests.post(f"{BASE_URL}/signup", json=payload)
+    return _handle_response(resp)
 
 
-def login(username: str, password: str) -> Tuple[Any, int]:
-    # Backend expects OAuth2 form data
+def login(username: str, password: str) -> Dict[str, Any]:
+    # FastAPI OAuth2PasswordRequestForm expects form-encoded data
     payload = {"username": username, "password": password}
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    return _handle_request(
-        requests.post,
+    resp = requests.post(
         f"{BASE_URL}/login",
         data=payload,
-        headers=headers,
-        timeout=15,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
+    return _handle_response(resp)
 
 
-# ------------------------------------------------------------------------------
-# Pantry / Expiry
-# ------------------------------------------------------------------------------
+# ---------- HELPERS ----------
 
-def get_pantry(token: str, category: Optional[str] = None) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}"}
-    params: Dict[str, Any] = {}
+
+def _auth_headers(token: Optional[str]) -> Dict[str, str]:
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ---------- PANTRY ----------
+
+
+def get_pantry(token: str, category: Optional[str] = None) -> Dict[str, Any]:
+    params = {}
     if category:
         params["category"] = category
-    return _handle_request(
-        requests.get,
+    resp = requests.get(
         f"{BASE_URL}/pantry",
-        headers=headers,
+        headers=_auth_headers(token),
         params=params,
-        timeout=15,
     )
+    return _handle_response(resp)
 
 
-def add_pantry_item(
+def add_pantry(
     token: str,
     name: str,
     category: str,
     quantity: float,
     unit: str,
-    expiry_date: Optional[str],
-) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    expiry_date: Optional[str] = None,
+) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "name": name,
         "category": category,
@@ -83,98 +97,76 @@ def add_pantry_item(
     }
     if expiry_date:
         payload["expiry_date"] = expiry_date
-    return _handle_request(
-        requests.post,
+
+    resp = requests.post(
         f"{BASE_URL}/pantry",
-        headers=headers,
+        headers=_auth_headers(token),
         json=payload,
-        timeout=15,
     )
+    return _handle_response(resp)
 
 
-def get_expiring_items(token: str, days: int = 7) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}"}
-    params = {"days": days}
-    return _handle_request(
-        requests.get,
-        f"{BASE_URL}/expiry",
-        headers=headers,
-        params=params,
-        timeout=15,
+def delete_pantry_item(token: str, item_id: int) -> Dict[str, Any]:
+    resp = requests.delete(
+        f"{BASE_URL}/pantry/{item_id}",
+        headers=_auth_headers(token),
     )
+    return _handle_response(resp)
 
 
-# ------------------------------------------------------------------------------
-# Recipes & Quick Generate
-# ------------------------------------------------------------------------------
+# ---------- RECOMMENDATIONS & QUICK GENERATE ----------
 
-def get_recommendations(
-    token: str,
-    category: Optional[str] = None,
-) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload: Dict[str, Any] = {"category": category}
-    return _handle_request(
-        requests.post,
+
+def get_recommendations(token: str, category: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Calls POST /recommendations with an optional category.
+    Backend returns a list of recipe objects.
+    """
+    payload: Dict[str, Any] = {}
+    if category and category.lower() != "any":
+        payload["category"] = category
+
+    resp = requests.post(
         f"{BASE_URL}/recommendations",
-        headers=headers,
+        headers=_auth_headers(token),
         json=payload,
-        timeout=30,
     )
+    return _handle_response(resp)
 
 
-def quick_generate(
-    token: str,
-    ingredients: List[str],
-) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+def quick_generate(token: str, ingredients: List[str]) -> Dict[str, Any]:
+    """
+    Calls POST /quick-generate.
+    Backend returns: {"recipe": {...}}
+    """
     payload = {"ingredients": ingredients}
-    return _handle_request(
-        requests.post,
+    resp = requests.post(
         f"{BASE_URL}/quick-generate",
-        headers=headers,
+        headers=_auth_headers(token),
         json=payload,
-        timeout=30,
     )
+    return _handle_response(resp)
 
 
-# ------------------------------------------------------------------------------
-# Shopping List & Cooking
-# ------------------------------------------------------------------------------
+# ---------- SHOPPING LIST ----------
+
 
 def create_shopping_list(
     token: str,
     recipe_name: str,
     recipe_ingredients: List[str],
-) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+) -> Dict[str, Any]:
+    """
+    Calls POST /shopping-list.
+    Backend compares ingredients with pantry and returns missing items.
+    """
     payload = {
         "recipe_name": recipe_name,
         "recipe_ingredients": recipe_ingredients,
     }
-    return _handle_request(
-        requests.post,
+    resp = requests.post(
         f"{BASE_URL}/shopping-list",
-        headers=headers,
+        headers=_auth_headers(token),
         json=payload,
-        timeout=30,
     )
-
-
-def cook_recipe(
-    token: str,
-    recipe_name: str,
-    recipe_ingredients: List[str],
-) -> Tuple[Any, int]:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {
-        "recipe_name": recipe_name,
-        "recipe_ingredients": recipe_ingredients,
-    }
-    return _handle_request(
-        requests.post,
-        f"{BASE_URL}/cook",
-        headers=headers,
-        json=payload,
-        timeout=30,
-    )
+    return _handle_response(resp)

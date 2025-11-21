@@ -1,15 +1,14 @@
-# app/schemas.py
 from datetime import datetime, date
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, ConfigDict
 
 
 # ---------- User ----------
 
 class UserBase(BaseModel):
     username: str
-    email: Optional[EmailStr] = None
+    email: EmailStr
 
 
 class UserCreate(UserBase):
@@ -20,8 +19,7 @@ class UserRead(UserBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ---------- Pantry ----------
@@ -29,8 +27,8 @@ class UserRead(UserBase):
 class PantryItemBase(BaseModel):
     name: str
     category: Optional[str] = None
-    quantity: Optional[float] = None
-    unit: Optional[str] = None
+    quantity: float
+    unit: str
     expiry_date: Optional[date] = None
 
 
@@ -42,13 +40,10 @@ class PantryItemRead(PantryItemBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
-# ---------- Recipes / Generation ----------
-
-
+# ---------- Recipes / Recommendations ----------
 
 class Recipe(BaseModel):
     title: str
@@ -58,7 +53,7 @@ class Recipe(BaseModel):
 
 
 class RecommendationRequest(BaseModel):
-    category: Optional[str] = None
+    category: Optional[str] = None  # 'healthy', 'cheat_meal', 'easy_to_cook', etc.
 
 
 class QuickGenerateRequest(BaseModel):
@@ -74,10 +69,6 @@ class QuickGenerateResponse(BaseModel):
 class ShoppingListCreate(BaseModel):
     recipe_name: str
     recipe_ingredients: List[str]
-# app/schemas.py
-
-class CookRequest(BaseModel):
-    ingredients: List[str]
 
 
 class ShoppingListRead(BaseModel):
@@ -87,14 +78,16 @@ class ShoppingListRead(BaseModel):
     created_at: datetime
     is_completed: bool
 
-    class Config:
-        from_attributes = True
-# app/schemas.py 
+    model_config = ConfigDict(from_attributes=False)
 
-from typing import List
-from pydantic import BaseModel
 
+# ---------- Cook ----------
 
 class CookRequest(BaseModel):
-    recipe_name: str
-    recipe_ingredients: List[str]
+    recipe_title: str
+    ingredients: List[str]
+
+
+class CookResponse(BaseModel):
+    message: str
+    removed_items: List[PantryItemRead]

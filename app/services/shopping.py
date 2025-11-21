@@ -1,34 +1,20 @@
-# app/services/shopping.py
+from typing import List, Dict
 
-from typing import List
-from ..models import PantryItem
+from sqlalchemy.orm import Session
 
-
-def _norm(s: str) -> str:
-    return s.strip().lower()
+from .. import models
 
 
 def compute_shopping_list_items(
     recipe_ingredients: List[str],
-    pantry_items: List[PantryItem],
+    pantry_items: List[models.PantryItem],
 ) -> List[str]:
     """
-    Given a list of ingredient names for a recipe and the user's pantry items,
-    return a list of ingredient names that are NOT available in the pantry.
-    Partial matches are allowed (e.g., 'tomato' matches 'tomato sauce').
+    Compare recipe ingredients with pantry item names.
+    Returns a list of missing ingredients (case-insensitive exact match).
     """
+    recipe_norm = {ing.strip().lower() for ing in recipe_ingredients if ing.strip()}
+    pantry_norm = {item.name.strip().lower() for item in pantry_items}
 
-    available_names = [_norm(p.name) for p in pantry_items]
-    missing: List[str] = []
-
-    for raw_ing in recipe_ingredients:
-        ing = _norm(raw_ing)
-        if not ing:
-            continue
-
-        # Check if any pantry name is close enough
-        present = any(ing in p or p in ing for p in available_names)
-        if not present and raw_ing not in missing:
-            missing.append(raw_ing)
-
+    missing = sorted(list(recipe_norm - pantry_norm))
     return missing
