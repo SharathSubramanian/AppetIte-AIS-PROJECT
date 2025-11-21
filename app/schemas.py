@@ -91,3 +91,11 @@ class CookRequest(BaseModel):
 class CookResponse(BaseModel):
     message: str
     removed_items: List[PantryItemRead]
+
+# app/schemas.py  (append near the bottom)
+
+from typing import List
+
+class CookRecipeRequest(BaseModel):
+    recipe_title: str
+    ingredients: List[str]

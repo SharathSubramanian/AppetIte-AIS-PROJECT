@@ -2,7 +2,7 @@ from datetime import timedelta
 import json
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -13,11 +13,12 @@ from .auth import (
     authenticate_user,
     create_access_token,
 )
-from .deps import get_db_dep, get_current_user_dep
+from .deps import get_current_user_dep, get_db_dep
+
+# FIXED: single correct import
 from .services import pantry as pantry_service
 from .services import recipes as recipes_service
 from .services import shopping as shopping_service
-from app.services import recipes as recipes_service
 
 Base.metadata.create_all(bind=engine)
 
@@ -26,7 +27,6 @@ app = FastAPI(
     description="Backend API for AppetIte project",
     version="0.2.0",
 )
-
 
 # ---------- Auth / Users ----------
 
@@ -58,12 +58,17 @@ def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password.",
         )
+
     access_token_expires = timedelta(minutes=60 * 24)
     access_token = create_access_token(
         data={"sub": user.username},
         expires_delta=access_token_expires,
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
 
 @app.get("/me", response_model=schemas.UserRead)
@@ -79,8 +84,7 @@ def add_pantry_item(
     db: Session = Depends(get_db_dep),
     current_user: models.User = Depends(get_current_user_dep),
 ):
-    item = pantry_service.create_pantry_item(db, current_user.id, item_in)
-    return item
+    return pantry_service.create_pantry_item(db, current_user.id, item_in)
 
 
 @app.get("/pantry/", response_model=List[schemas.PantryItemRead])
@@ -89,8 +93,17 @@ def list_pantry(
     db: Session = Depends(get_db_dep),
     current_user: models.User = Depends(get_current_user_dep),
 ):
-    items = pantry_service.list_pantry_items(db, current_user.id, category)
-    return items
+    return pantry_service.list_pantry_items(db, current_user.id, category)
+
+
+@app.delete("/pantry/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_pantry_item(
+    item_id: int,
+    db: Session = Depends(get_db_dep),
+    current_user: models.User = Depends(get_current_user_dep),
+):
+    pantry_service.delete_pantry_item(db, current_user.id, item_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------- Recommendations ----------
@@ -104,15 +117,14 @@ def get_recommendations(
     pantry_items = pantry_service.list_pantry_items(db, current_user.id)
     ingredients = [item.name for item in pantry_items]
 
-    recipes = recipes_service.recommend_recipes_from_inventory(
+    return recipes_service.recommend_recipes_from_inventory(
         ingredients=ingredients,
         category=req.category,
         max_recipes=5,
     )
-    return recipes
 
 
-# ---------- Quick Generate (not using pantry) ----------
+# ---------- Quick Generate ----------
 
 @app.post("/quick-generate", response_model=schemas.QuickGenerateResponse)
 def quick_generate(
@@ -137,11 +149,10 @@ def create_shopping_list(
         pantry_items=pantry_items,
     )
 
-    items_json = json.dumps(missing)
     sl = models.ShoppingList(
         user_id=current_user.id,
         recipe_name=req.recipe_name,
-        items_json=items_json,
+        items_json=json.dumps(missing),
     )
     db.add(sl)
     db.commit()
@@ -154,19 +165,9 @@ def create_shopping_list(
         created_at=sl.created_at,
         is_completed=sl.is_completed,
     )
-@app.post("/cook")
-def cook(data: schemas.CookRequest, 
-         user=Depends(get_current_user), 
-         db: Session = Depends(get_db)):
 
-    ok = recipes_service.cook_recipe(db, user.id, data.ingredients)
 
-    return {
-        "status": "success" if ok else "failed",
-        "message": "Recipe cooked! Pantry updated."
-    }
-
-# ---------- Cook (consume pantry ingredients) ----------
+# ---------- Cook (FINAL WORKING VERSION) ----------
 
 @app.post("/cook", response_model=schemas.CookResponse)
 def cook_recipe(
