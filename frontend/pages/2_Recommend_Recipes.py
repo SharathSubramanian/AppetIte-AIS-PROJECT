@@ -5,6 +5,7 @@ import streamlit as st
 from utils.api import get_pantry, get_recommendations, delete_pantry_item
 
 
+
 st.set_page_config(page_title="AppetIte Recommendations", page_icon="🍽️", layout="centered")
 
 token = st.session_state.get("token")

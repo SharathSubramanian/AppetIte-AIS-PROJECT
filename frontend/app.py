@@ -1,71 +1,64 @@
-import sys
-import os
+# frontend/app.py
+
+from __future__ import annotations
 
 import streamlit as st
 
-# Ensure we can import from utils
-sys.path.append(os.path.dirname(__file__))
-sys.path.append(os.path.join(os.path.dirname(__file__), "utils"))
+from utils.api import signup, login
 
-from utils.api import signup, login  # noqa: E402
+st.set_page_config(page_title="AppetIte", page_icon="🍽", layout="centered")
 
+st.title("🍽 AppetIte – Smart Recipe Assistant")
 
-st.set_page_config(page_title="AppetIte", page_icon="🍳", layout="centered")
-
+# Session state: token and username
 if "token" not in st.session_state:
-    st.session_state.token = None
+    st.session_state["token"] = None
 if "username" not in st.session_state:
-    st.session_state.username = None
+    st.session_state["username"] = None
+if "mode" not in st.session_state:
+    st.session_state["mode"] = "login"
 
-st.title("🍳 AppetIte — Smart AI Recipe Assistant")
+mode = st.radio("Choose mode", ["Login", "Sign up"], horizontal=True)
+st.session_state["mode"] = "login" if mode == "Login" else "signup"
 
-# If already logged in, show a quick info and a button to go to Pantry
-if st.session_state.token:
-    st.info(f"Logged in as **{st.session_state.username}**")
-    if st.button("Go to Pantry"):
-        st.switch_page("pages/1_Pantry.py")
+# ---------------------------------------------------------
+# Signup
+# ---------------------------------------------------------
+if st.session_state["mode"] == "signup":
+    st.subheader("Create a new account")
 
-tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
+    su_username = st.text_input("Username")
+    su_email = st.text_input("Email")
+    su_password = st.text_input("Password", type="password")
 
-with tab1:
+    if st.button("Sign up"):
+        if not (su_username and su_email and su_password):
+            st.error("Please fill in all fields.")
+        else:
+            resp = signup(su_username, su_email, su_password)
+            if resp["code"] != 201:
+                st.error(f"Sign up failed ({resp['code']}): {resp['message']}")
+            else:
+                st.success("Account created. You can now log in.")
+
+# ---------------------------------------------------------
+# Login
+# ---------------------------------------------------------
+else:
     st.subheader("Login")
 
-    username = st.text_input("Username", key="login_user")
-    password = st.text_input("Password", type="password", key="login_pass")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if not username or not password:
-            st.error("Please fill both username and password.")
+        if not (username and password):
+            st.error("Please enter username and password.")
         else:
             resp = login(username, password)
-
-            if resp["code"] == 200:
-                data = resp["data"]
-                token = data.get("access_token")
-
-                if not token:
-                    st.error("Login succeeded but no token returned from server.")
-                else:
-                    st.session_state.token = token
-                    st.session_state.username = username
-                    st.success("Logged in successfully!")
-                    st.switch_page("pages/1_Pantry.py")
+            if resp["code"] != 200 or not resp["data"] or "access_token" not in resp["data"]:
+                st.error(f"Login failed ({resp['code']}): {resp['message']}")
             else:
-                st.error(f"Login failed: {resp['message']}")
-
-with tab2:
-    st.subheader("Create Account")
-
-    new_username = st.text_input("Choose a username", key="sign_user")
-    email = st.text_input("Email", key="sign_email")
-    new_password = st.text_input("Password", type="password", key="sign_pass")
-
-    if st.button("Sign Up"):
-        if not new_username or not email or not new_password:
-            st.error("Please fill all fields.")
-        else:
-            resp = signup(new_username, email, new_password)
-            if resp["code"] in (200, 201):
-                st.success("Account created! Please log in using the Login tab.")
-            else:
-                st.error(f"Sign up failed: {resp['message']}")
+                token = resp["data"]["access_token"]
+                st.session_state["token"] = token
+                st.session_state["username"] = username
+                st.success("Logged in successfully. Use the sidebar to navigate.")

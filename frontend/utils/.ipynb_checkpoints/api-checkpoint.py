@@ -1,84 +1,125 @@
-import os
-from typing import List, Optional, Dict, Any
+# frontend/utils/api.py
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
 
 import requests
 
-BASE_URL = os.getenv("APPETITE_API_URL", "http://127.0.0.1:8000")
+BASE_URL = "http://127.0.0.1:8000"
 
 
-def _handle_response(resp: requests.Response) -> Dict[str, Any]:
-    """
-    Wrap all backend responses into a unified structure:
-    {
-        "code": <status_code>,
-        "data": <parsed JSON or None>,
-        "message": <OK or error text>
+def _headers(token: Optional[str] = None) -> Dict[str, str]:
+    h = {
+        "accept": "application/json",
     }
-    """
-    status = resp.status_code
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def _request(
+    method: str,
+    path: str,
+    token: Optional[str] = None,
+    json: Any = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    url = f"{BASE_URL}{path}"
+
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=_headers(token),
+            json=json,
+            params=params,
+            timeout=30,
+        )
+    except Exception as e:
+        return {
+            "code": 0,
+            "message": str(e),
+            "data": None,
+        }
+
     try:
         data = resp.json()
     except Exception:
-        text = resp.text.strip()
-        return {
-            "code": status,
-            "data": None,
-            "message": f"Non-JSON response ({status}): {text[:200]}",
-        }
+        data = None
 
-    # Try to extract a meaningful message
-    msg = "OK"
-    if not (200 <= status < 300):
-        if isinstance(data, dict) and "detail" in data:
-            msg = str(data["detail"])
-        else:
-            msg = str(data)
+    # Extract a human-readable message
+    msg: str = resp.reason
+    if isinstance(data, dict):
+        if "detail" in data and isinstance(data["detail"], str):
+            msg = data["detail"]
+        elif "message" in data and isinstance(data["message"], str):
+            msg = data["message"]
 
-    return {"code": status, "data": data, "message": msg}
+    return {
+        "code": resp.status_code,
+        "message": msg,
+        "data": data,
+    }
 
 
-# ---------- AUTH ----------
+# ---------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------
 
 
 def signup(username: str, email: str, password: str) -> Dict[str, Any]:
-    payload = {"username": username, "email": email, "password": password}
-    resp = requests.post(f"{BASE_URL}/signup", json=payload)
-    return _handle_response(resp)
+    payload = {
+        "username": username,
+        "email": email,
+        "password": password,
+    }
+    return _request("POST", "/signup", json=payload)
 
 
 def login(username: str, password: str) -> Dict[str, Any]:
-    # FastAPI OAuth2PasswordRequestForm expects form-encoded data
-    payload = {"username": username, "password": password}
-    resp = requests.post(
-        f"{BASE_URL}/login",
-        data=payload,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    return _handle_response(resp)
+    # FastAPI OAuth2PasswordRequestForm expects form data, not JSON
+    url = f"{BASE_URL}/login"
+    try:
+        resp = requests.post(
+            url,
+            data={"username": username, "password": password},
+            headers={"accept": "application/json"},
+            timeout=30,
+        )
+    except Exception as e:
+        return {
+            "code": 0,
+            "message": str(e),
+            "data": None,
+        }
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    msg: str = resp.reason
+    if isinstance(data, dict) and "detail" in data and isinstance(data["detail"], str):
+        msg = data["detail"]
+
+    return {
+        "code": resp.status_code,
+        "message": msg,
+        "data": data,
+    }
 
 
-# ---------- HELPERS ----------
-
-
-def _auth_headers(token: Optional[str]) -> Dict[str, str]:
-    if not token:
-        return {}
-    return {"Authorization": f"Bearer {token}"}
-
-
-# ---------- PANTRY ----------
+# ---------------------------------------------------------------------
+# Pantry
+# ---------------------------------------------------------------------
 
 
 def get_pantry(token: str, category: Optional[str] = None) -> Dict[str, Any]:
     params = {}
     if category:
         params["category"] = category
-    resp = requests.get(
-        f"{BASE_URL}/pantry",
-        headers=_auth_headers(token),
-        params=params,
-    )
-    return _handle_response(resp)
+    return _request("GET", "/pantry/", token=token, params=params)
 
 
 def add_pantry(
@@ -98,57 +139,37 @@ def add_pantry(
     if expiry_date:
         payload["expiry_date"] = expiry_date
 
-    resp = requests.post(
-        f"{BASE_URL}/pantry",
-        headers=_auth_headers(token),
-        json=payload,
-    )
-    return _handle_response(resp)
+    return _request("POST", "/pantry/", token=token, json=payload)
 
 
 def delete_pantry_item(token: str, item_id: int) -> Dict[str, Any]:
-    resp = requests.delete(
-        f"{BASE_URL}/pantry/{item_id}",
-        headers=_auth_headers(token),
-    )
-    return _handle_response(resp)
+    return _request("DELETE", f"/pantry/{item_id}", token=token)
 
 
-# ---------- RECOMMENDATIONS & QUICK GENERATE ----------
+# ---------------------------------------------------------------------
+# Recommendations / Quick generate
+# ---------------------------------------------------------------------
 
 
 def get_recommendations(token: str, category: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Calls POST /recommendations with an optional category.
-    Backend returns a list of recipe objects.
-    """
     payload: Dict[str, Any] = {}
-    if category and category.lower() != "any":
+    if category:
         payload["category"] = category
-
-    resp = requests.post(
-        f"{BASE_URL}/recommendations",
-        headers=_auth_headers(token),
-        json=payload,
-    )
-    return _handle_response(resp)
+    return _request("POST", "/recommendations", token=token, json=payload)
 
 
 def quick_generate(token: str, ingredients: List[str]) -> Dict[str, Any]:
     """
-    Calls POST /quick-generate.
-    Backend returns: {"recipe": {...}}
+    Call /quick-generate with a list of ingredient strings.
+    Backend expects: {"ingredients": ["chicken", "butter", ...]}
     """
     payload = {"ingredients": ingredients}
-    resp = requests.post(
-        f"{BASE_URL}/quick-generate",
-        headers=_auth_headers(token),
-        json=payload,
-    )
-    return _handle_response(resp)
+    return _request("POST", "/quick-generate", token=token, json=payload)
 
 
-# ---------- SHOPPING LIST ----------
+# ---------------------------------------------------------------------
+# Shopping list
+# ---------------------------------------------------------------------
 
 
 def create_shopping_list(
@@ -156,17 +177,12 @@ def create_shopping_list(
     recipe_name: str,
     recipe_ingredients: List[str],
 ) -> Dict[str, Any]:
-    """
-    Calls POST /shopping-list.
-    Backend compares ingredients with pantry and returns missing items.
-    """
     payload = {
         "recipe_name": recipe_name,
         "recipe_ingredients": recipe_ingredients,
     }
-    resp = requests.post(
-        f"{BASE_URL}/shopping-list",
-        headers=_auth_headers(token),
-        json=payload,
-    )
-    return _handle_response(resp)
+    return _request("POST", "/shopping-list", token=token, json=payload)
+
+
+def get_shopping_lists(token: str) -> Dict[str, Any]:
+    return _request("GET", "/shopping-list", token=token)

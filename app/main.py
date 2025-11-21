@@ -17,6 +17,7 @@ from .deps import get_db_dep, get_current_user_dep
 from .services import pantry as pantry_service
 from .services import recipes as recipes_service
 from .services import shopping as shopping_service
+from app.services import recipes as recipes_service
 
 Base.metadata.create_all(bind=engine)
 
@@ -153,7 +154,17 @@ def create_shopping_list(
         created_at=sl.created_at,
         is_completed=sl.is_completed,
     )
+@app.post("/cook")
+def cook(data: schemas.CookRequest, 
+         user=Depends(get_current_user), 
+         db: Session = Depends(get_db)):
 
+    ok = recipes_service.cook_recipe(db, user.id, data.ingredients)
+
+    return {
+        "status": "success" if ok else "failed",
+        "message": "Recipe cooked! Pantry updated."
+    }
 
 # ---------- Cook (consume pantry ingredients) ----------
 

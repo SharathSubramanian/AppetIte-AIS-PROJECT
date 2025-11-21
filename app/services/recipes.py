@@ -6,6 +6,8 @@ import random
 from .. import schemas
 from ..ml.inference import generate_recipe as ml_generate_recipe
 
+
+
 # ------------------------------------------------------------------------------
 # Title templates
 # ------------------------------------------------------------------------------
@@ -33,7 +35,28 @@ def _build_title(ingredients: List[str]) -> str:
     main = ", ".join(ingredients[:2]).title()
     pattern = random.choice(_BASE_TITLES)
     return pattern.format(main=main)
+# app/services/recipes.py
 
+from sqlalchemy.orm import Session
+from .. import models, schemas
+from typing import List
+
+def cook_recipe(db: Session, user_id: int, ingredients: List[str]):
+    """
+    Removes ingredients from pantry if names match.
+    """
+    for ing in ingredients:
+        item = (
+            db.query(models.PantryItem)
+            .filter(models.PantryItem.user_id == user_id,
+                    models.PantryItem.name.ilike(f"%{ing}%"))
+            .first()
+        )
+        if item:
+            db.delete(item)
+
+    db.commit()
+    return True
 
 # ------------------------------------------------------------------------------
 # QUICK GENERATE

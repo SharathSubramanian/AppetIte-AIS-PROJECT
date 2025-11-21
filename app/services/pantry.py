@@ -1,66 +1,35 @@
-from datetime import date
-from typing import List, Optional
+# app/services/pantry.py
 
 from sqlalchemy.orm import Session
-
 from .. import models, schemas
 
+def get_pantry(db: Session, user_id: int):
+    return db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id).all()
 
-def create_pantry_item(
-    db: Session,
-    user_id: int,
-    item_in: schemas.PantryItemCreate,
-) -> models.PantryItem:
-    item = models.PantryItem(
+def add_item(db: Session, user_id: int, item: schemas.PantryItemCreate):
+    db_item = models.PantryItem(
         user_id=user_id,
-        name=item_in.name.strip(),
-        category=item_in.category,
-        quantity=item_in.quantity,
-        unit=item_in.unit,
-        expiry_date=item_in.expiry_date,
+        name=item.name,
+        quantity=item.quantity,
+        unit=item.unit,
+        expiry=item.expiry
     )
-    db.add(item)
+    db.add(db_item)
     db.commit()
-    db.refresh(item)
-    return item
+    db.refresh(db_item)
+    return db_item
 
-
-def list_pantry_items(
-    db: Session,
-    user_id: int,
-    category: Optional[str] = None,
-) -> List[models.PantryItem]:
-    q = db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id)
-    if category:
-        q = q.filter(models.PantryItem.category == category)
-    return q.order_by(models.PantryItem.created_at.desc()).all()
-
-
-def consume_ingredients(
-    db: Session,
-    user_id: int,
-    ingredients: List[str],
-) -> List[models.PantryItem]:
-    """
-    Very simple "cook" logic:
-    - Normalize ingredient names to lowercase
-    - Remove pantry items where `name` is in the ingredient list.
-    """
-    normalized = {ing.strip().lower() for ing in ingredients if ing.strip()}
-    if not normalized:
-        return []
-
-    items = (
+def delete_item(db: Session, user_id: int, item_id: int):
+    item = (
         db.query(models.PantryItem)
-        .filter(models.PantryItem.user_id == user_id)
-        .all()
+        .filter(models.PantryItem.id == item_id,
+                models.PantryItem.user_id == user_id)
+        .first()
     )
 
-    removed: List[models.PantryItem] = []
-    for item in items:
-        if item.name.lower() in normalized:
-            removed.append(item)
-            db.delete(item)
+    if not item:
+        return False
 
+    db.delete(item)
     db.commit()
-    return removed
+    return True
