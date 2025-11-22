@@ -1,3 +1,6 @@
+# app/schemas.py
+from __future__ import annotations
+
 from datetime import datetime, date
 from typing import List, Optional
 
@@ -93,9 +96,10 @@ class CookResponse(BaseModel):
 # ---------- Feedback ----------
 
 class FeedbackCreate(BaseModel):
-    # FRONTEND sends "source", so we must use "source"
-    source: str               # "recommend" | "quickgen"
-    rating: int               # 1–5
+    # IMPORTANT: frontend sends `page`
+    # Allowed values: "recommend" or "quickgen"
+    page: str
+    rating: int  # 1–5
     comment: Optional[str] = None
 
 

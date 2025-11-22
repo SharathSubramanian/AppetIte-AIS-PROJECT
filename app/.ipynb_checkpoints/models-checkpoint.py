@@ -1,6 +1,11 @@
 # app/models.py
+from __future__ import annotations
+
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, Float, DateTime, Date, Boolean, ForeignKey, Text
+from sqlalchemy import (
+    Column, Integer, String, Float, DateTime,
+    Date, Boolean, ForeignKey, Text
+)
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -15,9 +20,21 @@ class User(Base):
     password_hash = Column(String(256), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    pantry_items = relationship("PantryItem", back_populates="user", cascade="all, delete-orphan")
-    shopping_lists = relationship("ShoppingList", back_populates="user", cascade="all, delete-orphan")
-    feedback = relationship("Feedback", back_populates="user", cascade="all, delete-orphan")
+    pantry_items = relationship(
+        "PantryItem",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    shopping_lists = relationship(
+        "ShoppingList",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    feedback_entries = relationship(
+        "Feedback",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
 
 
 class PantryItem(Base):
@@ -56,10 +73,13 @@ class Feedback(Base):
     __tablename__ = "feedback"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    page = Column(String, nullable=False)      # recommend | quickgen
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+
+    # matches schemas.FeedbackCreate.page
+    page = Column(String(32), nullable=False)  # "recommend" | "quickgen"
     rating = Column(Integer, nullable=False)   # 1–5
-    comment = Column(String, nullable=True)
+    comment = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    user = relationship("User", back_populates="feedback")
+    user = relationship("User", back_populates="feedback_entries")

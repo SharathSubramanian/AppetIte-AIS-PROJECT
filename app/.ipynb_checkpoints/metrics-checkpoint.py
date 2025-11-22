@@ -1,44 +1,44 @@
 # app/metrics.py
+from __future__ import annotations
 
 from prometheus_client import Counter, Histogram, Gauge
 
-# ---------------------------
-# Basic Request Metrics
-# ---------------------------
-
+# -------------------------
+# Core HTTP metrics
+# -------------------------
 REQUEST_COUNT = Counter(
-    "app_requests_total",
-    "Total number of requests",
-    ["method", "endpoint", "status_code"]
+    "appetite_request_count",
+    "Total HTTP requests",
+    ["method", "endpoint", "status_code"],
 )
 
 REQUEST_LATENCY = Histogram(
-    "app_request_latency_seconds",
-    "Request latency",
-    ["endpoint"]
+    "appetite_request_latency_seconds",
+    "Latency per endpoint in seconds",
+    ["endpoint"],
 )
 
 IN_PROGRESS = Gauge(
-    "app_in_progress_requests",
-    "Number of requests in progress"
+    "appetite_requests_in_progress",
+    "Number of requests currently being processed",
 )
 
-# ---------------------------
-# Feature Usage Metrics
-# ---------------------------
-
+# -------------------------
+# Feature usage metrics
+# -------------------------
 USAGE_COUNT = Counter(
-    "app_feature_usage_total",
-    "Usage count of features",
-    ["feature"]
+    "appetite_feature_usage_total",
+    "Count of feature usage",
+    ["feature"],
 )
 
-# ---------------------------
-# Feedback Metrics
-# ---------------------------
-
+# -------------------------
+# Feedback metrics
+# page = 'recommend' | 'quickgen'
+# rating = '1'..'5'
+# -------------------------
 FEEDBACK_COUNT = Counter(
-    "app_feedback_total",
-    "Total number of feedback items",
-    ["source", "rating"]
+    "appetite_feedback_total",
+    "User feedback count by page and rating",
+    ["page", "rating"],
 )

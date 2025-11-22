@@ -1,3 +1,4 @@
+# app/main.py
 from __future__ import annotations
 
 from datetime import timedelta
@@ -7,19 +8,23 @@ from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, status, Response, Request
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from . import models, schemas
 from .database import engine, Base
-from .auth import get_password_hash, authenticate_user, create_access_token
+from .auth import (
+    get_password_hash,
+    authenticate_user,
+    create_access_token,
+)
 from .deps import get_current_user_dep, get_db_dep
 
 from .services import pantry as pantry_service
 from .services import recipes as recipes_service
 from .services import shopping as shopping_service
 
-# ---------------------- METRICS ----------------------
 from .metrics import (
     REQUEST_COUNT,
     REQUEST_LATENCY,
@@ -28,20 +33,17 @@ from .metrics import (
     FEEDBACK_COUNT,
 )
 
-# =====================================================
-#               FASTAPI APP INIT
-# =====================================================
+Base.metadata.create_all(bind=engine)
+
 app = FastAPI(
     title="AppetIte Backend",
     description="Backend API for AppetIte project",
     version="0.3.0",
 )
 
-Base.metadata.create_all(bind=engine)
-
-# =====================================================
-#        PROMETHEUS MIDDLEWARE (FINAL VERSION)
-# =====================================================
+# ---------------------------
+# ✅ Prometheus Middleware (SINGLE, CLEAN, SAFE)
+# ---------------------------
 @app.middleware("http")
 async def prometheus_metrics_middleware(request: Request, call_next):
     start_time = time.perf_counter()
@@ -49,17 +51,18 @@ async def prometheus_metrics_middleware(request: Request, call_next):
     method = request.method
 
     IN_PROGRESS.inc()
-
+    response = None
     try:
         response = await call_next(request)
         status_code = str(response.status_code)
+        return response
     except Exception:
         status_code = "500"
         raise
     finally:
+        duration = time.perf_counter() - start_time
         IN_PROGRESS.dec()
 
-        duration = time.perf_counter() - start_time
         REQUEST_LATENCY.labels(endpoint=endpoint).observe(duration)
         REQUEST_COUNT.labels(
             method=method,
@@ -67,20 +70,17 @@ async def prometheus_metrics_middleware(request: Request, call_next):
             status_code=status_code,
         ).inc()
 
-    return response
 
-
-# =====================================================
-#                 PROMETHEUS METRICS ENDPOINT
-# =====================================================
+# ---------------------------
+# ✅ /metrics endpoint
+# ---------------------------
 @app.get("/metrics")
 def metrics():
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-# =====================================================
-#                     AUTH ROUTES
-# =====================================================
+# ---------- Auth / Users ----------
+
 @app.post("/signup", response_model=schemas.UserRead, status_code=status.HTTP_201_CREATED)
 def signup(user_in: schemas.UserCreate, db: Session = Depends(get_db_dep)):
     existing = db.query(models.User).filter(models.User.username == user_in.username).first()
@@ -124,9 +124,8 @@ def read_me(current_user: models.User = Depends(get_current_user_dep)):
     return current_user
 
 
-# =====================================================
-#                     PANTRY ROUTES
-# =====================================================
+# ---------- Pantry ----------
+
 @app.post("/pantry/", response_model=schemas.PantryItemRead, status_code=201)
 def add_pantry_item(
     item_in: schemas.PantryItemCreate,
@@ -158,9 +157,8 @@ def delete_pantry_item(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# =====================================================
-#                RECOMMENDATIONS ROUTES
-# =====================================================
+# ---------- Recommendations ----------
+
 @app.post("/recommendations", response_model=List[schemas.Recipe])
 def get_recommendations(
     req: schemas.RecommendationRequest,
@@ -179,9 +177,8 @@ def get_recommendations(
     )
 
 
-# =====================================================
-#               QUICK GENERATE ROUTE
-# =====================================================
+# ---------- Quick Generate ----------
+
 @app.post("/quick-generate", response_model=schemas.QuickGenerateResponse)
 def quick_generate(
     req: schemas.QuickGenerateRequest,
@@ -192,9 +189,8 @@ def quick_generate(
     return schemas.QuickGenerateResponse(recipe=recipe)
 
 
-# =====================================================
-#                 SHOPPING LIST ROUTE
-# =====================================================
+# ---------- Shopping List ----------
+
 @app.post("/shopping-list", response_model=schemas.ShoppingListRead)
 def create_shopping_list(
     req: schemas.ShoppingListCreate,
@@ -227,9 +223,8 @@ def create_shopping_list(
     )
 
 
-# =====================================================
-#                     COOK ROUTE
-# =====================================================
+# ---------- Cook (WORKING VERSION) ----------
+
 @app.post("/cook", response_model=schemas.CookResponse)
 def cook_recipe(
     req: schemas.CookRequest,
@@ -245,33 +240,35 @@ def cook_recipe(
     return schemas.CookResponse(message=msg, removed_items=removed_items)
 
 
-# =====================================================
-#                     FEEDBACK ROUTE
-# =====================================================
+# ---------- Feedback (FIXED end-to-end) ----------
+
 @app.post("/feedback", status_code=201)
 def feedback(
     req: schemas.FeedbackCreate,
     db: Session = Depends(get_db_dep),
     current_user: models.User = Depends(get_current_user_dep),
 ):
+    """
+    Stores feedback in DB + Prometheus counters.
+    req.page MUST be "recommend" or "quickgen".
+    """
     USAGE_COUNT.labels(feature="feedback_submit").inc()
-    FEEDBACK_COUNT.labels(source=req.source, rating=str(req.rating)).inc()
+    FEEDBACK_COUNT.labels(page=req.page, rating=str(req.rating)).inc()
 
     fb = models.Feedback(
         user_id=current_user.id,
-        source=req.source,
+        page=req.page,
         rating=req.rating,
         comment=req.comment,
     )
     db.add(fb)
     db.commit()
     db.refresh(fb)
+
     return {"status": "ok"}
 
 
-# =====================================================
-#                     HEALTH CHECK
-# =====================================================
+# ---------- Health ----------
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
