@@ -1,165 +1,185 @@
 # frontend/utils/api.py
 
+"""
+Central API client for the AppetIte frontend.
+
+All functions return a dict with the SAME shape:
+
+{
+    "code": <int HTTP status>,
+    "data": <parsed JSON or None>,
+    "message": <string, "ok" or error detail>
+}
+
+The Streamlit pages (app.py + pages/*) should ONLY depend on this shape.
+"""
+
 from __future__ import annotations
 
-import requests
 from typing import Any, Dict, List, Optional
+
+import requests
 
 BASE_URL = "http://127.0.0.1:8000"
 
 
-def _request(
-    method: str,
-    path: str,
-    token: Optional[str] = None,
-    json: Any = None,
-) -> Dict[str, Any]:
-    url = f"{BASE_URL}{path}"
-    headers: Dict[str, str] = {}
-
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
+def _wrap_response(resp: requests.Response) -> Dict[str, Any]:
+    """Convert a `requests.Response` into a uniform dict."""
     try:
-        r = requests.request(method, url, headers=headers, json=json)
-    except Exception as e:
-        return {
-            "code": 0,
-            "data": None,
-            "message": f"Request failed: {e}",
-        }
-
-    try:
-        data = r.json()
+        data = resp.json()
     except Exception:
         data = None
 
-    if r.status_code >= 400:
-        # Extract detail if FastAPI error
-        msg = "Request failed"
+    # Default message
+    msg: str
+
+    if 200 <= resp.status_code < 300:
+        # Success
         if isinstance(data, dict) and "detail" in data:
             msg = str(data["detail"])
         else:
-            msg = f"HTTP {r.status_code}"
-        return {
-            "code": r.status_code,
-            "data": data,
-            "message": msg,
-        }
+            msg = "ok"
+    else:
+        # Error
+        if isinstance(data, dict) and "detail" in data:
+            msg = str(data["detail"])
+        else:
+            msg = resp.text or "request failed"
 
     return {
-        "code": r.status_code,
+        "code": resp.status_code,
         "data": data,
-        "message": "ok",
+        "message": msg,
     }
 
 
-# ------------------------ Auth ------------------------
+# ---------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------
 
 
 def signup(username: str, email: str, password: str) -> Dict[str, Any]:
+    url = f"{BASE_URL}/signup"
     payload = {
         "username": username,
         "email": email,
         "password": password,
     }
-    return _request("POST", "/signup", json=payload)
+    resp = requests.post(url, json=payload)
+    return _wrap_response(resp)
 
 
-def login(username: str, password: str) -> dict:
+def login(username: str, password: str) -> Dict[str, Any]:
+    """
+    FastAPI /login is using OAuth2PasswordRequestForm,
+    so we must send x-www-form-urlencoded.
+    """
     url = f"{BASE_URL}/login"
-    data = {
-        "username": username,
-        "password": password,
-    }
-    resp = requests.post(url, data=data)
-
-    if resp.status_code != 200:
-        return {"status": "error", "message": resp.text}
-
-    j = resp.json()
-
-    if "access_token" not in j:
-        return {"status": "error", "message": "Invalid login response"}
-
-    return {
-        "status": "ok",
-        "token": j["access_token"]
-    }
+    data = {"username": username, "password": password}
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    resp = requests.post(url, data=data, headers=headers)
+    return _wrap_response(resp)
 
 
-# ---------------------- Pantry ------------------------
+# ---------------------------------------------------------------------
+# Pantry CRUD
+# ---------------------------------------------------------------------
+
+
+def _auth_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def get_pantry(token: str) -> Dict[str, Any]:
-    return _request("GET", "/pantry/", token=token)
+    url = f"{BASE_URL}/pantry/"
+    resp = requests.get(url, headers=_auth_headers(token))
+    return _wrap_response(resp)
 
 
 def add_pantry(
     token: str,
     name: str,
-    category: str,
+    category: Optional[str],
     quantity: float,
     unit: str,
-    expiry_date: Optional[str] = None,
+    expiry_date: Optional[str],
 ) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
+    url = f"{BASE_URL}/pantry/"
+    payload = {
         "name": name,
-        "category": category,
+        "category": category or "",
         "quantity": quantity,
         "unit": unit,
+        "expiry_date": expiry_date,  # can be None or ISO string
     }
-    if expiry_date:
-        payload["expiry_date"] = expiry_date
-
-    return _request("POST", "/pantry/", token=token, json=payload)
+    resp = requests.post(url, json=payload, headers=_auth_headers(token))
+    return _wrap_response(resp)
 
 
 def delete_pantry_item(token: str, item_id: int) -> Dict[str, Any]:
-    return _request("DELETE", f"/pantry/{item_id}", token=token)
+    url = f"{BASE_URL}/pantry/{item_id}"
+    resp = requests.delete(url, headers=_auth_headers(token))
+    return _wrap_response(resp)
 
 
-# -------------------- Recommendations -----------------
+# ---------------------------------------------------------------------
+# Recommendations & cooking
+# ---------------------------------------------------------------------
 
 
 def get_recommendations(
     token: str,
     category: Optional[str] = None,
 ) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "category": category,
-    }
-    return _request("POST", "/recommendations", token=token, json=payload)
+    url = f"{BASE_URL}/recommendations"
+    payload: Dict[str, Any] = {"category": category}
+    resp = requests.post(url, json=payload, headers=_auth_headers(token))
+    return _wrap_response(resp)
 
 
-def cook_recipe(token: str, recipe_title: str, ingredients: List[str]) -> Dict[str, Any]:
+def cook_recipe(
+    token: str,
+    recipe_title: str,
+    ingredients: List[str],
+) -> Dict[str, Any]:
+    """
+    Hit the /cook endpoint to consume ingredients from the pantry.
+    """
+    url = f"{BASE_URL}/cook"
     payload = {
         "recipe_title": recipe_title,
         "ingredients": ingredients,
     }
-    return _request("POST", "/cook", token=token, json=payload)
+    resp = requests.post(url, json=payload, headers=_auth_headers(token))
+    return _wrap_response(resp)
 
 
-# --------------------- Quick Generate -----------------
+# ---------------------------------------------------------------------
+# Quick generate (ignores pantry)
+# ---------------------------------------------------------------------
 
 
 def quick_generate(token: str, ingredients: List[str]) -> Dict[str, Any]:
-    payload = {
-        "ingredients": ingredients,
-    }
-    return _request("POST", "/quick-generate", token=token, json=payload)
+    url = f"{BASE_URL}/quick-generate"
+    payload = {"ingredients": ingredients}
+    resp = requests.post(url, json=payload, headers=_auth_headers(token))
+    return _wrap_response(resp)
 
 
-# --------------------- Shopping list ------------------
+# ---------------------------------------------------------------------
+# Shopping list
+# ---------------------------------------------------------------------
 
 
 def create_shopping_list(
     token: str,
     recipe_name: str,
-    ingredients: List[str],
+    recipe_ingredients: List[str],
 ) -> Dict[str, Any]:
+    url = f"{BASE_URL}/shopping-list"
     payload = {
         "recipe_name": recipe_name,
-        "recipe_ingredients": ingredients,
+        "recipe_ingredients": recipe_ingredients,
     }
-    return _request("POST", "/shopping-list", token=token, json=payload)
+    resp = requests.post(url, json=payload, headers=_auth_headers(token))
+    return _wrap_response(resp)

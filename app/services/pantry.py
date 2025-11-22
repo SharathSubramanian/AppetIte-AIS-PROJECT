@@ -1,32 +1,51 @@
 # app/services/pantry.py
-# app/services/pantry.py
 
-from typing import List
-
+from typing import List, Optional
 from sqlalchemy.orm import Session
+
 from .. import models, schemas
 
-def get_pantry(db: Session, user_id: int):
-    return db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id).all()
 
-def add_item(db: Session, user_id: int, item: schemas.PantryItemCreate):
-    db_item = models.PantryItem(
+# -------------------------
+# CREATE PANTRY ITEM
+# -------------------------
+def create_pantry_item(db: Session, user_id: int, item_in: schemas.PantryItemCreate):
+    item = models.PantryItem(
         user_id=user_id,
-        name=item.name,
-        quantity=item.quantity,
-        unit=item.unit,
-        expiry=item.expiry
+        name=item_in.name.strip(),
+        quantity=item_in.quantity,
+        category=item_in.category,
     )
-    db.add(db_item)
+    db.add(item)
     db.commit()
-    db.refresh(db_item)
-    return db_item
+    db.refresh(item)
+    return item
 
-def delete_item(db: Session, user_id: int, item_id: int):
+
+# -------------------------
+# LIST PANTRY ITEMS  ✅ Missing function
+# -------------------------
+def list_pantry_items(
+    db: Session,
+    user_id: int,
+    category: Optional[str] = None,
+) -> List[models.PantryItem]:
+
+    query = db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id)
+
+    if category:
+        query = query.filter(models.PantryItem.category == category)
+
+    return query.order_by(models.PantryItem.id.desc()).all()
+
+
+# -------------------------
+# DELETE PANTRY ITEM
+# -------------------------
+def delete_pantry_item(db: Session, user_id: int, item_id: int):
     item = (
         db.query(models.PantryItem)
-        .filter(models.PantryItem.id == item_id,
-                models.PantryItem.user_id == user_id)
+        .filter(models.PantryItem.id == item_id, models.PantryItem.user_id == user_id)
         .first()
     )
 
@@ -36,63 +55,30 @@ def delete_item(db: Session, user_id: int, item_id: int):
     db.delete(item)
     db.commit()
     return True
-def delete_pantry_item(db: Session, user_id: int, item_id: int) -> None:
-    """
-    Delete a single pantry item that belongs to this user.
-    """
-    item = (
-        db.query(models.PantryItem)
-        .filter(
-            models.PantryItem.id == item_id,
-            models.PantryItem.user_id == user_id,
-        )
-        .first()
-    )
-    if not item:
-        return  # nothing to delete, silently ignore
-
-    db.delete(item)
-    db.commit()
 
 
+# -------------------------
+# CONSUME INGREDIENTS (COOK)
+# -------------------------
 def consume_ingredients(
     db: Session,
     user_id: int,
-    ingredients: List[str],
-) -> None:
-    """
-    Very simple 'consume' logic:
+    ingredients: List[str]
+) -> List[models.PantryItem]:
 
-    For each ingredient name, find pantry items with a matching name
-    (case-insensitive) for this user and delete them.
+    removed_items = []
 
-    You could make this more sophisticated later (e.g., decrement quantity).
-    """
-    if not ingredients:
-        return
+    ingredients = [i.lower().strip() for i in ingredients]
 
-    norm_ings = [ing.strip().lower() for ing in ingredients if ing.strip()]
-    if not norm_ings:
-        return
+    pantry_items = list_pantry_items(db, user_id)
 
-    q = (
-        db.query(models.PantryItem)
-        .filter(models.PantryItem.user_id == user_id)
-    )
-
-    items = q.all()
-    to_delete = []
-
-    for item in items:
-        if not item.name:
-            continue
-        if item.name.strip().lower() in norm_ings:
-            to_delete.append(item)
-
-    if not to_delete:
-        return
-
-    for item in to_delete:
-        db.delete(item)
+    for used in ingredients:
+        for item in pantry_items:
+            if item.name.lower() == used:
+                removed_items.append(item)
+                db.delete(item)
+                break
 
     db.commit()
+
+    return removed_items
