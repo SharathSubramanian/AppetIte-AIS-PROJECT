@@ -17,3 +17,4 @@ python-jose[cryptography]
 pydantic
 accelerate
 pydantic[email]
+prometheus-client==0.20.0

@@ -17,6 +17,7 @@ class User(Base):
 
     pantry_items = relationship("PantryItem", back_populates="user", cascade="all, delete-orphan")
     shopping_lists = relationship("ShoppingList", back_populates="user", cascade="all, delete-orphan")
+    feedback = relationship("Feedback", back_populates="user", cascade="all, delete-orphan")
 
 
 class PantryItem(Base):
@@ -49,3 +50,16 @@ class ShoppingList(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="shopping_lists")
+
+
+class Feedback(Base):
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    page = Column(String, nullable=False)      # recommend | quickgen
+    rating = Column(Integer, nullable=False)   # 1–5
+    comment = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="feedback")

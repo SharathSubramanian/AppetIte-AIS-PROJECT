@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from utils.api import get_pantry, get_recommendations, cook_recipe
+from utils.api import get_recommendations, cook_recipe, submit_feedback
 
 st.set_page_config(page_title="Recommendations", page_icon="🍽️", layout="wide")
 
@@ -14,10 +14,8 @@ if not token:
     st.stop()
 
 st.title("🍽️ Recommended Recipes")
-
 st.write("AppetIte suggests recipes based on your pantry items.")
 
-# Optional filter by category
 category = st.selectbox(
     "Filter by category (optional)",
     ["", "healthy", "cheat meal", "easy to cook", "comfort food", "high protein"],
@@ -29,7 +27,7 @@ if st.button("Get recommendations"):
     st.session_state["recs_triggered"] = True
 
 if not st.session_state.get("recs_triggered"):
-    st.info("Press 'Get recommendations' to see suggestions based on your pantry.")
+    st.info("Press 'Get recommendations' to see suggestions.")
     st.stop()
 
 with st.spinner("Fetching recommendations..."):
@@ -42,19 +40,18 @@ if resp["code"] >= 400:
 recipes: List[Dict[str, Any]] = resp["data"] or []
 
 if not recipes:
-    st.info("No recipes could be recommended from your current pantry.")
+    st.info("No recipes match your pantry.")
     st.stop()
 
-st.subheader("Suggested recipes")
+st.subheader("Suggested Recipes")
 
 for idx, recipe in enumerate(recipes):
     with st.container():
         st.markdown(f"### {recipe.get('title', f'Recipe {idx+1}')}")
-        cat = recipe.get("category")
-        if cat:
-            st.caption(f"Category: {cat}")
+        if recipe.get("category"):
+            st.caption(f"Category: {recipe['category']}")
 
-        ings = recipe.get("ingredients") or []
+        ings = recipe.get("ingredients", [])
         st.markdown("**Ingredients:**")
         for ing in ings:
             st.markdown(f"- {ing}")
@@ -62,7 +59,6 @@ for idx, recipe in enumerate(recipes):
         st.markdown("**Instructions:**")
         st.write(recipe.get("instructions", "No instructions available."))
 
-        # Cook this button
         if st.button("Cook this", key=f"cook_{idx}"):
             cook_resp = cook_recipe(
                 token=token,
@@ -70,7 +66,23 @@ for idx, recipe in enumerate(recipes):
                 ingredients=ings,
             )
             if cook_resp["code"] >= 400:
-                st.error(f"Failed to cook recipe: {cook_resp['message']}")
+                st.error(f"Failed: {cook_resp['message']}")
             else:
-                st.success("Pantry updated for this recipe. Enjoy your meal! 🍽️")
+                st.success("Pantry updated. Enjoy! 🍽️")
                 st.rerun()
+
+        st.divider()
+
+# ---------------- FEEDBACK FORM ----------------
+
+st.subheader("⭐ Rate these recommendations")
+
+rating = st.radio("How useful were these recipes?", [1,2,3,4,5], horizontal=True)
+comment = st.text_area("Optional comment")
+
+if st.button("Submit feedback", key="fb_recommend"):
+    resp = submit_feedback(token, page="recommend", rating=rating, comment=comment)
+    if resp["code"] == 201:
+        st.success("Thanks for your feedback!")
+    else:
+        st.error("Could not submit feedback.")

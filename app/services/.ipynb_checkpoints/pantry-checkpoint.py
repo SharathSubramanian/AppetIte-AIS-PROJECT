@@ -9,12 +9,17 @@ from .. import models, schemas
 # -------------------------
 # CREATE PANTRY ITEM
 # -------------------------
+def _safe_unit(unit):
+    return unit if unit else ""
+
 def create_pantry_item(db: Session, user_id: int, item_in: schemas.PantryItemCreate):
     item = models.PantryItem(
-        user_id=user_id,
-        name=item_in.name.strip(),
-        quantity=item_in.quantity,
-        category=item_in.category,
+    user_id=user_id,
+    name=item_in.name,
+    category=item_in.category,
+    quantity=item_in.quantity,
+    unit=item_in.unit or "",    
+    expiry_date=item_in.expiry_date,
     )
     db.add(item)
     db.commit()
@@ -25,18 +30,17 @@ def create_pantry_item(db: Session, user_id: int, item_in: schemas.PantryItemCre
 # -------------------------
 # LIST PANTRY ITEMS  ✅ Missing function
 # -------------------------
-def list_pantry_items(
-    db: Session,
-    user_id: int,
-    category: Optional[str] = None,
-) -> List[models.PantryItem]:
-
-    query = db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id)
-
+def list_pantry_items(db, user_id, category=None):
+    q = db.query(models.PantryItem).filter(models.PantryItem.user_id == user_id)
     if category:
-        query = query.filter(models.PantryItem.category == category)
+        q = q.filter(models.PantryItem.category == category)
 
-    return query.order_by(models.PantryItem.id.desc()).all()
+    items = q.all()
+
+    for item in items:
+        item.unit = item.unit or ""
+
+    return items
 
 
 # -------------------------

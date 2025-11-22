@@ -183,3 +183,13 @@ def create_shopping_list(
     }
     resp = requests.post(url, json=payload, headers=_auth_headers(token))
     return _wrap_response(resp)
+
+def submit_feedback(token: str, page: str, rating: int, comment: str = ""):
+    url = f"{BASE_URL}/feedback"
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {"page": page, "rating": rating, "comment": comment}
+    r = requests.post(url, headers=headers, json=payload)
+    try:
+        return {"data": r.json(), "code": r.status_code}
+    except Exception:
+        return {"data": None, "code": r.status_code, "message": r.text}

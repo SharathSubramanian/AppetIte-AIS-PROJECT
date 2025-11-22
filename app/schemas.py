@@ -18,7 +18,6 @@ class UserCreate(UserBase):
 class UserRead(UserBase):
     id: int
     created_at: datetime
-
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -28,7 +27,7 @@ class PantryItemBase(BaseModel):
     name: str
     category: Optional[str] = None
     quantity: float
-    unit: str
+    unit: Optional[str] = None
     expiry_date: Optional[date] = None
 
 
@@ -39,11 +38,10 @@ class PantryItemCreate(PantryItemBase):
 class PantryItemRead(PantryItemBase):
     id: int
     created_at: datetime
-
     model_config = ConfigDict(from_attributes=True)
 
 
-# ---------- Recipes / Recommendations ----------
+# ---------- Recipes ----------
 
 class Recipe(BaseModel):
     title: str
@@ -53,7 +51,7 @@ class Recipe(BaseModel):
 
 
 class RecommendationRequest(BaseModel):
-    category: Optional[str] = None  # 'healthy', 'cheat_meal', 'easy_to_cook', etc.
+    category: Optional[str] = None
 
 
 class QuickGenerateRequest(BaseModel):
@@ -64,7 +62,7 @@ class QuickGenerateResponse(BaseModel):
     recipe: Recipe
 
 
-# ---------- Shopping list ----------
+# ---------- Shopping ----------
 
 class ShoppingListCreate(BaseModel):
     recipe_name: str
@@ -77,7 +75,6 @@ class ShoppingListRead(BaseModel):
     items: List[str]
     created_at: datetime
     is_completed: bool
-
     model_config = ConfigDict(from_attributes=False)
 
 
@@ -92,10 +89,18 @@ class CookResponse(BaseModel):
     message: str
     removed_items: List[PantryItemRead]
 
-# app/schemas.py  (append near the bottom)
 
-from typing import List
+# ---------- Feedback ----------
 
-class CookRecipeRequest(BaseModel):
-    recipe_title: str
-    ingredients: List[str]
+class FeedbackCreate(BaseModel):
+    # FRONTEND sends "source", so we must use "source"
+    source: str               # "recommend" | "quickgen"
+    rating: int               # 1–5
+    comment: Optional[str] = None
+
+
+class FeedbackRead(FeedbackCreate):
+    id: int
+    user_id: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
